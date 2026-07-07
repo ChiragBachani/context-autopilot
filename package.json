@@ -1,0 +1,41 @@
+{
+  "name": "context-autopilot",
+  "version": "0.1.0",
+  "description": "Automated context collection for coding agents. Watches your real agent sessions, finds what you keep repeating and correcting, and distills it into CLAUDE.md / AGENTS.md — with diffs you approve.",
+  "keywords": [
+    "claude-code",
+    "agents",
+    "context-engineering",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "mcp",
+    "ai-agents",
+    "context-layer"
+  ],
+  "homepage": "https://thecontextlayer.ai",
+  "license": "MIT",
+  "author": "The Context Layer <hello@thecontextlayer.ai>",
+  "type": "module",
+  "bin": {
+    "ctxlayer": "dist/cli.js",
+    "ctxlayer-mcp": "dist/mcp.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "start": "node dist/cli.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

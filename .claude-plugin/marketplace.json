@@ -1,0 +1,14 @@
+{
+  "name": "the-context-layer",
+  "owner": {
+    "name": "The Context Layer",
+    "url": "https://thecontextlayer.ai"
+  },
+  "plugins": [
+    {
+      "name": "context-autopilot",
+      "source": "./plugin",
+      "description": "Automated context collection: mine your past agent sessions for repeated instructions and corrections, and distill them into CLAUDE.md / AGENTS.md with your approval."
+    }
+  ]
+}

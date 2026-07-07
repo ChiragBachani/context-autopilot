@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Context Layer — Context Autopilot: automated context collection for coding agents</title>
+<meta name="description" content="Context Autopilot mines your real coding-agent sessions for the instructions you keep repeating and the corrections you keep making, and distills them into CLAUDE.md / AGENTS.md rules you approve. Plus the independent directory of the context layer.">
+<style>
+  :root{
+    --bg:#0a0e14; --bg2:#0f1522; --card:#131a2a; --border:#1f2a40;
+    --text:#e6ebf4; --muted:#8b97ad; --accent:#00c8a0; --accent2:#5b8aff;
+    --amber:#f5a623; --mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 24px}
+  nav{display:flex;align-items:center;justify-content:space-between;padding:20px 0}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;color:var(--text);white-space:nowrap}
+  .logo-mark{width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:inline-block}
+  nav .links{display:flex;gap:22px;font-size:14px}
+  nav .links a{color:var(--muted);white-space:nowrap}
+  nav .links a:hover{color:var(--text);text-decoration:none}
+
+  .hero{padding:72px 0 48px;text-align:center}
+  .badge{display:inline-block;font-size:12.5px;letter-spacing:.4px;color:var(--accent);border:1px solid var(--border);background:var(--bg2);padding:5px 14px;border-radius:99px;margin-bottom:22px}
+  h1{font-size:clamp(30px,5vw,52px);line-height:1.12;letter-spacing:-.02em;max-width:820px;margin:0 auto 18px}
+  h1 .grad{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{font-size:19px;color:var(--muted);max-width:660px;margin:0 auto 34px}
+  .install{display:inline-flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 22px;font-family:var(--mono);font-size:16px}
+  .install .dollar{color:var(--accent)}
+  .install button{background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:4px 10px;font-size:12px;cursor:pointer}
+  .install button:hover{color:var(--text);border-color:var(--muted)}
+  .hero .meta{margin-top:16px;font-size:13.5px;color:var(--muted)}
+
+  section{padding:56px 0}
+  h2{font-size:28px;letter-spacing:-.01em;margin-bottom:10px}
+  .lede{color:var(--muted);max-width:640px;margin-bottom:34px}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px}
+  .card .n{font-family:var(--mono);color:var(--accent);font-size:13px;margin-bottom:10px}
+  .card h3{font-size:17px;margin-bottom:8px}
+  .card p{font-size:14.5px;color:var(--muted)}
+
+  .demo{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:26px 28px;font-family:var(--mono);font-size:13.5px;line-height:1.75;overflow-x:auto}
+  .demo .c{color:var(--muted)}
+  .demo .g{color:var(--accent)}
+  .demo .y{color:var(--amber)}
+  .demo .b{color:var(--accent2)}
+
+  .why{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .why .card h3{color:var(--text)}
+  blockquote{border-left:3px solid var(--accent);padding:6px 0 6px 18px;color:var(--muted);font-size:15px;margin:18px 0}
+
+  .dir-cats{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+  .dir-cat h3{font-size:15px;color:var(--accent2);text-transform:uppercase;letter-spacing:.6px;font-size:12.5px;margin-bottom:12px}
+  .tool{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--border);font-size:14px}
+  .tool:last-child{border-bottom:none}
+  .tool .name{font-weight:600;white-space:nowrap}
+  .tool .what{color:var(--muted);text-align:right;font-size:13px}
+
+  .news{background:linear-gradient(135deg,rgba(0,200,160,.08),rgba(91,138,255,.08));border:1px solid var(--border);border-radius:16px;padding:40px;text-align:center}
+  .news h2{margin-bottom:8px}
+  .news p{color:var(--muted);margin-bottom:22px}
+  .news form{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+  .news input{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:9px;padding:12px 16px;font-size:15px;width:300px;max-width:100%}
+  .news button{background:var(--accent);color:#04281f;font-weight:700;border:none;border-radius:9px;padding:12px 22px;font-size:15px;cursor:pointer}
+  .news button:hover{filter:brightness(1.1)}
+
+  footer{border-top:1px solid var(--border);padding:34px 0;margin-top:40px;font-size:13.5px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+  @media(max-width:820px){.steps{grid-template-columns:1fr}.why{grid-template-columns:1fr}.dir-cats{grid-template-columns:1fr}}
+  @media(max-width:640px){
+    nav{flex-direction:column;align-items:flex-start;gap:12px}
+    nav .links{flex-wrap:wrap;gap:14px}
+    .hero{padding:44px 0 36px}
+    .install{flex-direction:column;gap:8px;padding:14px 18px}
+    .tool{flex-direction:column;gap:2px}
+    .tool .what{text-align:left}
+    .news{padding:28px 18px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <span class="logo"><span class="logo-mark"></span>The Context Layer</span>
+    <span class="links">
+      <a href="#how">How it works</a>
+      <a href="#why">Why</a>
+      <a href="#directory">Directory</a>
+      <a href="#newsletter">Newsletter</a>
+      <a href="https://github.com/chiragbachani/context-autopilot">GitHub</a>
+    </span>
+  </nav>
+
+  <div class="hero">
+    <span class="badge">CONTEXT AUTOPILOT · v0.1 · FREE &amp; OPEN SOURCE</span>
+    <h1>You already taught your agent everything.<br><span class="grad">It just wasn't listening.</span></h1>
+    <p class="sub">Context Autopilot mines your real coding-agent sessions — every instruction you repeated, every correction you made, every action you rejected — and distills them into CLAUDE.md / AGENTS.md rules you approve. Automated context collection, grounded in evidence.</p>
+    <span class="install"><span><span class="dollar">$</span> npx context-autopilot scan</span><button onclick="navigator.clipboard.writeText('npx context-autopilot scan')">copy</button></span>
+    <div class="meta">Zero dependencies · Runs 100% locally · Uses your existing <code>claude</code> CLI — no API key needed</div>
+  </div>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="lede">Your session history is the highest-signal context source that exists — it's a literal record of what your agent got wrong and what you had to say to fix it. Autopilot turns it into durable context.</p>
+    <div class="steps">
+      <div class="card">
+        <div class="n">01 · OBSERVE</div>
+        <h3>Mine your sessions</h3>
+        <p><code>ctxlayer scan</code> reads your local Claude Code transcripts and finds three kinds of evidence: instructions you repeated across sessions, corrections you made after the agent went wrong, and tool calls you rejected.</p>
+      </div>
+      <div class="card">
+        <div class="n">02 · DISTILL</div>
+        <h3>Evidence in, rules out</h3>
+        <p><code>ctxlayer distill</code> sends the signals — not your whole history — through Claude and gets back imperative, project-specific rules. Each one carries the quotes that justify it. Generic advice gets filtered out.</p>
+      </div>
+      <div class="card">
+        <div class="n">03 · APPROVE</div>
+        <h3>You stay in charge</h3>
+        <p><code>ctxlayer apply</code> shows each proposal with its rationale and evidence. Accepted rules land in a managed block inside CLAUDE.md and AGENTS.md — your hand-written content is never touched.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Real output, real project</h2>
+    <p class="lede">Run against an actual SaaS project's session history, Autopilot surfaced rules like these — each one a convention the developer had already taught the agent the hard way:</p>
+    <div class="demo">
+<span class="c">$ ctxlayer distill</span><br>
+Distilling 26 signal(s) with your local `claude` CLI…<br><br>
+<span class="g">[1/8] Perform click-and-type tests before reporting any UI work complete</span>  <span class="y">(confidence: high)</span><br>
+&nbsp;&nbsp;+ Before declaring any screen done, click every button and verify it works —<br>
+&nbsp;&nbsp;&nbsp;&nbsp;do not ship cosmetic (non-functional) buttons.<br>
+&nbsp;&nbsp;<span class="c">evidence: "There are still so many buttons that dont work, like the publish…"</span><br><br>
+<span class="g">[2/8] Staff login cannot access or toggle to admin view</span>  <span class="y">(confidence: high)</span><br>
+&nbsp;&nbsp;+ When authenticated as staff, the admin role toggle must be hidden —<br>
+&nbsp;&nbsp;&nbsp;&nbsp;this is access control, not a UI preference.<br>
+&nbsp;&nbsp;<span class="c">evidence: "…from the staff login, I do not want to see the admin view."</span><br><br>
+<span class="g">[3/8] The platform ships as a self-hosted Docker image</span>  <span class="y">(confidence: high)</span><br>
+&nbsp;&nbsp;+ Clients run the image on their own server; never store or pull their<br>
+&nbsp;&nbsp;&nbsp;&nbsp;data into any external cloud platform.<br>
+&nbsp;&nbsp;<span class="c">evidence: "the data for their schedules and rosters should stay with them…"</span><br><br>
+<span class="b">Next: `ctxlayer apply` to review and write the ones you accept.</span>
+    </div>
+  </section>
+
+  <section id="why">
+    <h2>Why evidence-based, not generated</h2>
+    <div class="why">
+      <div class="card">
+        <h3>Auto-generated context files make agents worse</h3>
+        <p>Research on LLM-generated CLAUDE.md/AGENTS.md files found they <em>reduce</em> task success and raise inference cost — repo scans produce generic filler the model then has to wade through. A focused 50-line file beats a sprawling 1,000-line one.</p>
+      </div>
+      <div class="card">
+        <h3>Your corrections are ground truth</h3>
+        <p>When you tell an agent "no — like this" you are labeling training data for free. Autopilot only proposes rules your own words support, quotes them as evidence, and prefers fewer, higher-confidence rules over volume.</p>
+      </div>
+      <div class="card">
+        <h3>Works with every agent</h3>
+        <p>Output lands in both CLAUDE.md and AGENTS.md, so Claude Code, Cursor, Copilot, Codex, and 30+ other agents all benefit. Also ships as a Claude Code plugin and an MCP server.</p>
+      </div>
+      <div class="card">
+        <h3>Coding agents are chapter one</h3>
+        <p>The engine is source-agnostic: it distills <em>observations of work</em> into Agent Operating Procedures. Coding transcripts are the first source. Browser workflows and ambient capture are next — until agents absorb the work you repeat, without you ever "building an agent."</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="directory">
+    <h2>The Context Layer Index</h2>
+    <p class="lede">An independent, curated map of the context layer — who does what, without the vendor slant. Updated continuously.</p>
+    <div class="dir-cats">
+      <div class="card dir-cat">
+        <h3>Agent memory layers</h3>
+        <div class="tool"><span class="name"><a href="https://mem0.ai">Mem0</a></span><span class="what">Managed long-term memory; largest ecosystem</span></div>
+        <div class="tool"><span class="name"><a href="https://www.getzep.com">Zep</a></span><span class="what">Temporal knowledge graph; strong on time-aware recall</span></div>
+        <div class="tool"><span class="name"><a href="https://www.letta.com">Letta</a></span><span class="what">OS-style paged memory (MemGPT lineage)</span></div>
+        <div class="tool"><span class="name"><a href="https://supermemory.ai">Supermemory</a></span><span class="what">Personal memory vault with deep MCP integration</span></div>
+        <div class="tool"><span class="name"><a href="https://www.cognee.ai">Cognee</a></span><span class="what">Graph + vector memory pipelines</span></div>
+        <div class="tool"><span class="name"><a href="https://github.com/getzep/graphiti">Graphiti</a></span><span class="what">Open-source temporal graph engine</span></div>
+        <div class="tool"><span class="name"><a href="https://langchain-ai.github.io/langmem/">LangMem</a></span><span class="what">Memory inside the LangGraph loop</span></div>
+      </div>
+      <div class="card dir-cat">
+        <h3>Context for coding agents</h3>
+        <div class="tool"><span class="name">Context Autopilot</span><span class="what">Evidence-based context distilled from your sessions — this site</span></div>
+        <div class="tool"><span class="name"><a href="https://agents.md">AGENTS.md</a></span><span class="what">The open cross-agent context file standard</span></div>
+        <div class="tool"><span class="name"><a href="https://context7.com">Context7</a></span><span class="what">Up-to-date library docs as agent context</span></div>
+        <div class="tool"><span class="name"><a href="https://github.com/github/github-mcp-server">GitHub MCP</a></span><span class="what">Repo, PR &amp; issue context over MCP</span></div>
+        <div class="tool"><span class="name"><a href="https://code.claude.com">Claude Code</a></span><span class="what">CLAUDE.md, rules, skills, hooks — deepest native support</span></div>
+      </div>
+      <div class="card dir-cat">
+        <h3>Enterprise context platforms</h3>
+        <div class="tool"><span class="name"><a href="https://www.glean.com">Glean</a></span><span class="what">Fully-managed enterprise context &amp; search</span></div>
+        <div class="tool"><span class="name"><a href="https://atlan.com">Atlan</a></span><span class="what">Governed data-catalog context layer</span></div>
+        <div class="tool"><span class="name"><a href="https://www.interloom.com">Interloom</a></span><span class="what">Captures expert operational knowledge for agents</span></div>
+        <div class="tool"><span class="name"><a href="https://www.graphlit.com">Graphlit</a></span><span class="what">Managed ingestion → agent-ready knowledge</span></div>
+        <div class="tool"><span class="name"><a href="https://www.llamaindex.ai">LlamaIndex</a></span><span class="what">Retrieval framework powering many context stacks</span></div>
+      </div>
+      <div class="card dir-cat">
+        <h3>Observation &amp; capture</h3>
+        <div class="tool"><span class="name"><a href="https://screenpipe.com">Screenpipe</a></span><span class="what">24/7 local screen+audio capture (source-available)</span></div>
+        <div class="tool"><span class="name"><a href="https://pieces.app">Pieces</a></span><span class="what">Developer workstream memory across IDE/browser</span></div>
+        <div class="tool"><span class="name"><a href="https://www.limitless.ai">Limitless</a></span><span class="what">Wearable + meeting capture (acquired Rewind)</span></div>
+        <div class="tool"><span class="name"><a href="https://developers.openai.com/codex/record-and-replay">Codex Record &amp; Replay</a></span><span class="what">Demonstrate a task once → reusable skill</span></div>
+        <div class="tool"><span class="name"><a href="https://www.minded.com">Minded</a></span><span class="what">Record a browser task → team workflow</span></div>
+        <div class="tool"><span class="name"><a href="https://scribehow.com">Scribe</a></span><span class="what">Auto-generated SOPs from screen recordings</span></div>
+      </div>
+      <div class="card dir-cat">
+        <h3>Context observability</h3>
+        <div class="tool"><span class="name"><a href="https://langfuse.com">Langfuse</a></span><span class="what">Open-source LLM traces, evals, prompt mgmt</span></div>
+        <div class="tool"><span class="name"><a href="https://www.braintrust.dev">Braintrust</a></span><span class="what">Agent observability + evals, IDE-native via MCP</span></div>
+        <div class="tool"><span class="name"><a href="https://smith.langchain.com">LangSmith</a></span><span class="what">Tracing &amp; debugging for LangChain stacks</span></div>
+        <div class="tool"><span class="name"><a href="https://phoenix.arize.com">Arize Phoenix</a></span><span class="what">Self-hostable, OpenTelemetry-native traces</span></div>
+        <div class="tool"><span class="name"><a href="https://github.com/mcpsnoop/mcpsnoop">mcpsnoop</a></span><span class="what">"Wireshark for MCP" — see what agents actually receive</span></div>
+      </div>
+      <div class="card dir-cat">
+        <h3>Memory portability</h3>
+        <div class="tool"><span class="name"><a href="https://memoryx.cc">MemoryX</a></span><span class="what">Export/import memories across ChatGPT, Claude, Gemini</span></div>
+        <div class="tool"><span class="name"><a href="https://plurality.network">AI Context Flow</a></span><span class="what">Universal memory layer above every assistant</span></div>
+        <div class="tool"><span class="name"><a href="https://modelcontextprotocol.io">MCP</a></span><span class="what">The protocol the whole layer speaks</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="newsletter">
+    <div class="news">
+      <h2>The Context Layer, weekly</h2>
+      <p>One email a week on who's winning the context layer — new tools, benchmarks, and what actually works. No filler.</p>
+      <form action="https://buttondown.com/api/emails/embed-subscribe/thecontextlayer" method="post" target="_blank">
+        <input type="email" name="email" placeholder="you@company.com" required>
+        <button type="submit">Subscribe</button>
+      </form>
+    </div>
+  </section>
+
+  <footer>
+    <span>© 2026 The Context Layer · <a href="mailto:hello@thecontextlayer.ai">hello@thecontextlayer.ai</a></span>
+    <span><a href="https://github.com/chiragbachani/context-autopilot">GitHub</a> · <a href="#directory">Directory</a> · MIT licensed</span>
+  </footer>
+</div>
+</body>
+</html>
