@@ -120,6 +120,67 @@ function mergeEntries(existing: AopEntry[], incoming: AopEntry[]): AopEntry[] {
   return merged;
 }
 
+export interface DecisionResult {
+  accepted: string[];
+  rejected: string[];
+  /** Titles the caller sent that matched no pending proposal. */
+  unmatched: string[];
+  applied: { target: ProposalTarget; path: string; created: boolean; total: number }[];
+  stillPending: number;
+}
+
+/**
+ * Apply explicit user decisions to pending proposals by title. Accepted
+ * entries are written to their target context files; rejected ones are
+ * remembered (and never re-proposed); everything else stays pending.
+ */
+export async function applyDecisions(
+  rootPath: string,
+  acceptTitles: string[],
+  rejectTitles: string[] = [],
+): Promise<DecisionResult> {
+  const file = await loadProposals(rootPath);
+  if (!file || file.proposals.length === 0) {
+    throw new Error(`No proposals found at ${proposalsPath(rootPath)}. Run distill first.`);
+  }
+  const norm = (s: string) => s.trim().toLowerCase();
+  const acceptSet = new Set(acceptTitles.map(norm));
+  const rejectSet = new Set(rejectTitles.map(norm));
+  const matched = new Set<string>();
+  const accepted: Proposal[] = [];
+  const rejected: string[] = [];
+  for (const proposal of file.proposals) {
+    if (proposal.status !== 'pending') continue;
+    const title = norm(proposal.entry.title);
+    if (acceptSet.has(title)) {
+      proposal.status = 'accepted';
+      accepted.push(proposal);
+      matched.add(title);
+    } else if (rejectSet.has(title)) {
+      proposal.status = 'rejected';
+      rejected.push(proposal.entry.title);
+      matched.add(title);
+    }
+  }
+  const unmatched = [...acceptSet, ...rejectSet].filter((t) => !matched.has(t));
+  await saveProposals(file);
+
+  const applied: DecisionResult['applied'] = [];
+  const targets = new Set<ProposalTarget>();
+  for (const p of accepted) for (const t of p.targets) targets.add(t);
+  for (const target of targets) {
+    const entries = accepted.filter((p) => p.targets.includes(target)).map((p) => p.entry);
+    applied.push({ target, ...(await applyToFile(rootPath, target, entries)) });
+  }
+  return {
+    accepted: accepted.map((p) => p.entry.title),
+    rejected,
+    unmatched,
+    applied,
+    stillPending: file.proposals.filter((p) => p.status === 'pending').length,
+  };
+}
+
 export function renderProposalPreview(proposal: Proposal, index: number, total: number): string {
   const { entry } = proposal;
   const evidence = entry.evidence

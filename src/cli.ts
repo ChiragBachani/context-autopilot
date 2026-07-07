@@ -25,6 +25,7 @@ import {
   renderProposalPreview,
   saveProposals,
 } from './propose.js';
+import { freshSignals, loadDistilledFingerprints, recordDistilledSignals } from './state.js';
 import type { ProposalFile, ProposalTarget, Signal } from './types.js';
 
 interface Flags {
@@ -34,12 +35,14 @@ interface Flags {
   global?: boolean;
   json?: boolean;
   yes?: boolean;
+  hook?: boolean;
   out?: string;
   minScore: number;
+  threshold: number;
 }
 
 function parseArgs(argv: string[]): { command: string; flags: Flags } {
-  const flags: Flags = { minScore: 4, source: 'all' };
+  const flags: Flags = { minScore: 4, source: 'all', threshold: 3 };
   let command = 'help';
   const rest = [...argv];
   if (rest[0] && !rest[0].startsWith('-')) command = rest.shift()!;
@@ -69,6 +72,12 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
         break;
       case '--min-score':
         flags.minScore = Number(rest.shift() ?? '4');
+        break;
+      case '--threshold':
+        flags.threshold = Number(rest.shift() ?? '3');
+        break;
+      case '--hook':
+        flags.hook = true;
         break;
       case '--out':
       case '-o':
@@ -135,7 +144,9 @@ function globalRoot(): string {
   return join(homedir(), '.claude');
 }
 
-async function scanSignals(flags: Flags): Promise<ScanResult> {
+async function scanSignals(flags: Flags): Promise<ScanResult>;
+async function scanSignals(flags: Flags, opts: { soft: boolean }): Promise<ScanResult | undefined>;
+async function scanSignals(flags: Flags, opts?: { soft: boolean }): Promise<ScanResult | undefined> {
   if (flags.global) {
     const observations = await observeEverything(flags.source);
     const projects = new Set(observations.map((o) => o.project)).size;
@@ -145,6 +156,7 @@ async function scanSignals(flags: Flags): Promise<ScanResult> {
   const wanted = projectDir(flags);
   const result = await observeProject(flags.project ?? wanted, flags.source);
   if (!result) {
+    if (opts?.soft) return undefined;
     fail(
       `No agent sessions found for ${wanted}.\nRun \`ctxlayer projects\` to see observable projects, then pass one with --project <path>.`,
     );
@@ -190,6 +202,9 @@ async function cmdDistill(flags: Flags): Promise<void> {
     model: flags.model,
     scope: flags.global ? 'global' : 'project',
   });
+  // These signals have now been reviewed by the distiller — `check` should
+  // only nudge again once genuinely new evidence accumulates.
+  await recordDistilledSignals(rootPath, signals);
   if (proposals.length === 0) {
     console.log('The distiller found nothing durable enough to propose. Good sign — your context files may already cover it.');
     return;
@@ -265,6 +280,47 @@ async function applyAll(
   }
 }
 
+/**
+ * Fast, model-free check: have new durable signals accumulated since the
+ * last distill run? `--hook` mode prints a nudge for the agent's context
+ * when the threshold is met, and stays completely silent otherwise —
+ * designed for a Claude Code SessionStart hook.
+ */
+async function cmdCheck(flags: Flags): Promise<void> {
+  // Soft failure: a hook must never break session start.
+  const result = await scanSignals(flags, { soft: true });
+  if (!result) {
+    if (!flags.hook && !flags.json) console.log('No agent sessions found for this project.');
+    return;
+  }
+  const seen = await loadDistilledFingerprints(result.rootPath);
+  const fresh = freshSignals(result.signals, seen);
+  if (flags.json) {
+    console.log(JSON.stringify({ scanned: result.scanned, newSignals: fresh.length, threshold: flags.threshold }, null, 2));
+    return;
+  }
+  if (flags.hook) {
+    if (fresh.length < flags.threshold) return; // silence = no nudge
+    const top = fresh
+      .slice(0, 3)
+      .map((s) => `"${s.summary.replace(/\s+/g, ' ').slice(0, 100)}"`)
+      .join('; ');
+    console.log(
+      `Context Autopilot: ${fresh.length} new durable context signal(s) have accumulated in this project's session history since the last distillation (e.g. ${top}). When there is a natural pause, offer to run \`ctxlayer distill\` and review the proposals with the user — do not run it mid-task or apply anything without their approval.`,
+    );
+    return;
+  }
+  if (fresh.length === 0) {
+    console.log(`No new signals since the last distill (${result.signals.length} total, all processed).`);
+    return;
+  }
+  console.log(`${fresh.length} new signal(s) since the last distill (of ${result.signals.length} total):\n`);
+  for (const s of fresh.slice(0, 10)) {
+    console.log(`  [${s.kind}] ×${s.observations.length}  "${s.summary.replace(/\s+/g, ' ').slice(0, 120)}"`);
+  }
+  console.log(`\nRun \`ctxlayer distill${flags.global ? ' --global' : ''}\` to process them.`);
+}
+
 async function cmdStale(flags: Flags): Promise<void> {
   const projectPath = projectDir(flags);
   const findings = await findStaleReferences(projectPath);
@@ -312,6 +368,8 @@ Commands:
   scan       Mine repeated instructions, corrections & rejections from sessions
   distill    Distill signals into CLAUDE.md / AGENTS.md proposals
   apply      Review proposals interactively and write accepted ones
+  check      Fast, model-free: any new signals since the last distill?
+             (--hook: print a nudge only past --threshold; silent otherwise)
   stale      Find context-file references the repo has outgrown (exit 1 if any)
   export     Export distilled entries as Agent Operating Procedure JSON
 
@@ -341,6 +399,8 @@ async function main(): Promise<void> {
       return cmdDistill(flags);
     case 'apply':
       return cmdApply(flags);
+    case 'check':
+      return cmdCheck(flags);
     case 'stale':
       return cmdStale(flags);
     case 'export':

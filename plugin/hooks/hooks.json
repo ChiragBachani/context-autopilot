@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y context-autopilot check --hook",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

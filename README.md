@@ -61,6 +61,7 @@ npm install -g context-autopilot   # or use npx, no install
 | `ctxlayer scan` | Mine signals from this project's sessions |
 | `ctxlayer distill` | Distill signals into proposals (`.ctxlayer/proposals.json`) |
 | `ctxlayer apply` | Review proposals interactively; write accepted ones |
+| `ctxlayer check` | Fast, model-free: how many new signals since the last distill? `--hook` prints a nudge only past `--threshold` (default 3), else stays silent |
 | `ctxlayer stale` | Find context-file references the repo has outgrown — missing files, removed npm scripts. Exits 1 on findings, so it drops straight into CI |
 | `ctxlayer export` | Export distilled entries as Agent Operating Procedure JSON |
 
@@ -83,7 +84,7 @@ Cursor session mining reads Cursor's local SQLite storage via Node's built-in `n
 /plugin install context-autopilot@the-context-layer
 ```
 
-Then ask Claude to "update project context from my session history."
+Then ask Claude to "update project context from my session history" — or don't ask at all: the plugin ships a **SessionStart hook** that runs `ctxlayer check` (fast, no model call) when a session begins. If enough new signals have accumulated since the last distillation, Claude gets a nudge to offer distillation at a natural pause. No new signals → complete silence.
 
 ### MCP server
 
@@ -98,7 +99,9 @@ Then ask Claude to "update project context from my session history."
 }
 ```
 
-Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_proposals`, `distill_global_context`, and `find_stale_context`.
+Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_proposals`, `distill_global_context`, `apply_context_proposals`, and `find_stale_context`.
+
+The approval loop closes entirely inside chat: distill tools return each proposal with its evidence and instruct the agent to ask you which to accept; `apply_context_proposals` then writes **exactly** the titles you approved, remembers the ones you rejected (never re-proposed), and leaves the rest pending. No tool ever touches a context file without your explicit decision.
 
 ## Privacy
 

@@ -11,7 +11,8 @@ import { discoverAll, observeEverything, observeProject, type ObservedResult } f
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
 import { findStaleReferences } from './stale.js';
-import { readExistingContext, renderProposalPreview, saveProposals } from './propose.js';
+import { applyDecisions, readExistingContext, renderProposalPreview, saveProposals } from './propose.js';
+import { recordDistilledSignals } from './state.js';
 import type { ProposalFile } from './types.js';
 
 const SERVER = { name: 'context-autopilot', version: '0.1.0' };
@@ -40,9 +41,39 @@ const TOOLS = [
     },
   },
   {
+    name: 'apply_context_proposals',
+    description:
+      "Apply the user's explicit decisions on pending context proposals. Call ONLY after the user has said in conversation which proposals to accept and/or reject — never decide for them. Pass the exact proposal titles. Accepted rules are written into the managed block of the context files; rejected ones are remembered and never re-proposed; unmentioned proposals stay pending.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        accept_titles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Titles of proposals the user accepted (may be empty).',
+        },
+        reject_titles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Titles of proposals the user rejected.',
+        },
+        project_path: {
+          type: 'string',
+          description: 'Absolute project path the proposals belong to. Defaults to the current working directory.',
+        },
+        global: {
+          type: 'boolean',
+          description: 'Set true for global proposals (from distill_global_context); targets ~/.claude.',
+        },
+      },
+      required: ['accept_titles'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'scan_context_signals',
     description:
-      'Mine a project\'s agent-session history for durable context signals: instructions the user repeated across sessions, corrections they made, and tool calls they rejected. Returns the signals as JSON.',
+      "Mine a project's agent-session history for durable context signals: instructions the user repeated across sessions, corrections they made, and tool calls they rejected. Returns the signals as JSON. Proactively call this when the user has corrected you more than once in a session, or when you notice them repeating an instruction they have given before — if strong signals come back, offer to distill them.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -63,7 +94,7 @@ const TOOLS = [
   {
     name: 'distill_context_proposals',
     description:
-      'Run the full Context Autopilot pipeline: scan session history, then distill the signals into evidence-backed CLAUDE.md/AGENTS.md proposals. Proposals are saved to .ctxlayer/proposals.json in the project for review; nothing is written to context files. Can take a minute.',
+      'Run the full Context Autopilot pipeline: scan session history, then distill the signals into evidence-backed CLAUDE.md/AGENTS.md proposals. Proposals are saved for review; NOTHING is written to context files until the user approves via apply_context_proposals. Can take a minute. Good moments to proactively suggest this: after the user corrects you repeatedly, or at the natural end of a substantial working session — ask first, then run.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -118,6 +149,28 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       2,
     );
   }
+  if (name === 'apply_context_proposals') {
+    const rootPath = args.global
+      ? join(homedir(), '.claude')
+      : ((args.project_path as string | undefined) ?? process.cwd());
+    const result = await applyDecisions(
+      rootPath,
+      (args.accept_titles as string[]) ?? [],
+      (args.reject_titles as string[]) ?? [],
+    );
+    const written = result.applied
+      .map((a) => `${a.created ? 'created' : 'updated'} ${a.path} (managed block: ${a.total} rule(s))`)
+      .join('; ');
+    return [
+      `Accepted: ${result.accepted.length ? result.accepted.join(', ') : 'none'}.`,
+      `Rejected: ${result.rejected.length ? result.rejected.join(', ') : 'none'}.`,
+      result.unmatched.length ? `WARNING — no pending proposal matched: ${result.unmatched.join(', ')}.` : '',
+      written ? `Files: ${written}.` : 'No files written.',
+      `${result.stillPending} proposal(s) still pending.`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
   if (name === 'distill_global_context') {
     const rootPath = join(homedir(), '.claude');
     const observations = await observeEverything();
@@ -125,6 +178,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     if (signals.length === 0) return 'No durable cross-project signals found yet.';
     const existingContext = await readExistingContext(rootPath);
     const proposals = await distill(signals, { existingContext, scope: 'global' });
+    await recordDistilledSignals(rootPath, signals);
     if (proposals.length === 0) {
       return 'The distiller found no durable cross-project rules to propose.';
     }
@@ -137,7 +191,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     };
     const saved = await saveProposals(file);
     const previews = proposals.map((p, i) => renderProposalPreview(p, i, proposals.length)).join('\n');
-    return `${proposals.length} global proposal(s) saved to ${saved}. Review each with the user before applying (\`ctxlayer apply --global\`).\n${previews}`;
+    return `${proposals.length} global proposal(s) saved to ${saved}. Present each to the user with its evidence and ask which to accept, then call apply_context_proposals with global=true and their exact decisions.\n${previews}`;
   }
   if (name === 'distill_context_proposals') {
     const { project, observations } = await findProject(args.project_path as string | undefined);
@@ -146,6 +200,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     if (signals.length === 0) return 'No durable signals found — nothing to distill yet.';
     const existingContext = await readExistingContext(projectPath);
     const proposals = await distill(signals, { existingContext });
+    await recordDistilledSignals(projectPath, signals);
     if (proposals.length === 0) {
       return 'The distiller found nothing durable enough to propose — existing context files may already cover it.';
     }
@@ -158,7 +213,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     };
     const saved = await saveProposals(file);
     const previews = proposals.map((p, i) => renderProposalPreview(p, i, proposals.length)).join('\n');
-    return `${proposals.length} proposal(s) saved to ${saved}. Review them with the user before applying (\`ctxlayer apply\`).\n${previews}`;
+    return `${proposals.length} proposal(s) saved to ${saved}. Present each to the user with its evidence and ask which to accept, then call apply_context_proposals with their exact decisions.\n${previews}`;
   }
   throw new Error(`Unknown tool: ${name}`);
 }
