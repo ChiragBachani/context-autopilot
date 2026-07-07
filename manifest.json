@@ -1,0 +1,73 @@
+{
+  "manifest_version": "0.2",
+  "name": "context-autopilot",
+  "display_name": "Context Autopilot",
+  "version": "0.5.2",
+  "description": "Mines your Claude Code and Cursor sessions into evidence-based CLAUDE.md / AGENTS.md rules you approve.",
+  "long_description": "Automated context collection for coding agents. Context Autopilot mines your real agent session history for repeated instructions, corrections, and rejected actions, then distills them into CLAUDE.md / AGENTS.md rules \u2014 with your own past messages as evidence. Includes global mode (cross-project rules about how you work), staleness detection, and in-chat approval. 100% local, zero dependencies, no API key required.",
+  "author": {
+    "name": "Chirag Bachani",
+    "url": "https://thecontextlayer.ai"
+  },
+  "homepage": "https://thecontextlayer.ai",
+  "documentation": "https://github.com/ChiragBachani/context-autopilot#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChiragBachani/context-autopilot"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "dist/mcp.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/mcp.js"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "name": "list_observable_projects",
+      "description": "List projects with observable agent-session history"
+    },
+    {
+      "name": "scan_context_signals",
+      "description": "Mine session history for repeated instructions, corrections, and rejections"
+    },
+    {
+      "name": "distill_context_proposals",
+      "description": "Distill signals into evidence-backed CLAUDE.md/AGENTS.md proposals"
+    },
+    {
+      "name": "distill_global_context",
+      "description": "Distill cross-project rules about how you work into ~/.claude/CLAUDE.md proposals"
+    },
+    {
+      "name": "apply_context_proposals",
+      "description": "Apply the user's accept/reject decisions to pending proposals"
+    },
+    {
+      "name": "find_stale_context",
+      "description": "Find context-file references the repo has outgrown"
+    }
+  ],
+  "keywords": [
+    "claude-code",
+    "context-engineering",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "memory",
+    "agents"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+node_modules
+*.md
+src
+test
+site
+launch
+.git
+.github
+.ctxlayer
+plugin
+server.json
+tsconfig.json
