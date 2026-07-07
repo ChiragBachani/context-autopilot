@@ -3,8 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyDecisions, applyToFile, saveProposals } from '../dist/propose.js';
-import type { AopEntry, ProposalFile } from '../dist/types.js';
+import {
+  applyDecisions,
+  applyToFile,
+  renderPickerOptions,
+  renderUserReport,
+  saveProposals,
+} from '../dist/propose.js';
+import type { AopEntry, Proposal, ProposalFile } from '../dist/types.js';
 
 function entry(title: string, rule: string): AopEntry {
   return { title, rule, rationale: '', confidence: 'high', evidence: [] };
@@ -58,6 +64,33 @@ test('applyDecisions applies accepts, remembers rejects, leaves rest pending', a
   assert.ok(content.includes('**Rule A** — Do A.'));
   assert.ok(!content.includes('Rule B'), 'rejected rule must not be written');
   assert.ok(!content.includes('Rule C'), 'pending rule must not be written');
+});
+
+test('user report and picker options both carry the evidence quotes', () => {
+  const proposals: Proposal[] = [
+    {
+      entry: {
+        title: 'Use pnpm, never npm',
+        rule: 'This repo uses pnpm.',
+        rationale: 'Repeated across sessions.',
+        confidence: 'high',
+        evidence: [
+          { quote: 'again — this repo uses pnpm, not npm', timestamp: '2026-06-12T00:00:00Z', sessionId: 's1' },
+          { quote: 'pnpm please', timestamp: '2026-06-20T00:00:00Z', sessionId: 's2' },
+        ],
+      },
+      targets: ['CLAUDE.md'],
+      status: 'pending',
+    },
+  ];
+  const report = renderUserReport(proposals, 'project');
+  assert.ok(report.includes('again — this repo uses pnpm, not npm'), 'report must quote evidence');
+  assert.ok(report.includes('2026-06-12'), 'report must date evidence');
+  assert.ok(report.includes('accept 1'), 'report must explain how to decide');
+
+  const picker = renderPickerOptions(proposals);
+  assert.ok(picker.includes('you said: "again — this repo uses pnpm, not npm"'), 'picker options must embed the quote');
+  assert.ok(picker.includes('Use pnpm, never npm'), 'picker options must carry the title');
 });
 
 test('applyToFile creates the file when missing', async () => {

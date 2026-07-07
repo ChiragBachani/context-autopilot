@@ -103,6 +103,11 @@ Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_pro
 
 The approval loop closes entirely inside chat: distill tools return each proposal with its evidence and instruct the agent to ask you which to accept; `apply_context_proposals` then writes **exactly** the titles you approved, remembers the ones you rejected (never re-proposed), and leaves the rest pending. No tool ever touches a context file without your explicit decision.
 
+## Troubleshooting
+
+- **"Skill not found" / agent can't see the tools** — MCP servers load at session start. After installing, start a **new** session (resumed/old sessions won't have the tools), and say "MCP tools" rather than a slash command: *"Using the context-autopilot MCP tools, distill this project's context proposals."*
+- Everything else (evidence presentation, approval flow, error hints) is built into the server itself — the tool results tell the agent exactly what to show and when to ask you.
+
 ## Privacy
 
 Everything runs on your machine. Transcripts are parsed locally; only the extracted signals (short quotes of your own instructions) are sent to the model you already use for coding. Nothing is uploaded anywhere else, ever.

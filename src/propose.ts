@@ -181,6 +181,57 @@ export async function applyDecisions(
   };
 }
 
+/**
+ * A finished, user-facing markdown report. Agents relay verbatim text far
+ * more reliably than they follow "present with evidence" instructions, so
+ * this is pre-composed to require zero editing.
+ */
+export function renderUserReport(proposals: Proposal[], scope: 'project' | 'global'): string {
+  const where = scope === 'global' ? 'your global ~/.claude/CLAUDE.md' : "this project's CLAUDE.md / AGENTS.md";
+  const body = proposals
+    .map((p, i) => {
+      const { entry } = p;
+      const quotes = entry.evidence
+        .slice(0, 3)
+        .map((ev) => {
+          const when = ev.timestamp ? ` — ${ev.timestamp.slice(0, 10)}` : '';
+          return `> "${clipText(ev.quote, 180)}"${when}`;
+        })
+        .join('\n');
+      return [
+        `**${i + 1}. ${entry.title}** _(${entry.confidence} confidence)_`,
+        entry.rule,
+        quotes || '> (no direct quote captured)',
+        entry.rationale ? `_Why: ${entry.rationale}_` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+    })
+    .join('\n\n');
+  return `## Proposed rules for ${where} — distilled from your own sessions\n\n${body}\n\nNothing is written until you decide. Reply with your choices (e.g. "accept 1 and 3, reject 2").`;
+}
+
+/**
+ * Ready-made option labels/descriptions for clients' structured-question
+ * (checkbox) tools, with the evidence quote embedded so pickers can't drop it.
+ */
+export function renderPickerOptions(proposals: Proposal[]): string {
+  return proposals
+    .map((p, i) => {
+      const { entry } = p;
+      const ev = entry.evidence[0];
+      const spread = entry.evidence.length > 1 ? ` (${entry.evidence.length} quotes)` : '';
+      const quote = ev ? ` · you said: "${clipText(ev.quote, 90)}"${spread}` : '';
+      return `${i + 1}. label: "${entry.title}" — description: "${entry.confidence}${quote}"`;
+    })
+    .join('\n');
+}
+
+function clipText(text: string, max: number): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return t.length > max ? t.slice(0, max) + '…' : t;
+}
+
 export function renderProposalPreview(proposal: Proposal, index: number, total: number): string {
   const { entry } = proposal;
   const evidence = entry.evidence
