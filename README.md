@@ -4,6 +4,8 @@
 
 Part of [The Context Layer](https://thecontextlayer.ai).
 
+Run in your terminal (it's a plain CLI — don't paste this into a chat):
+
 ```
 $ npx context-autopilot scan
 

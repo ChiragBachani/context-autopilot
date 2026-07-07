@@ -25,32 +25,6 @@
       ]
     }
   },
-  "tools": [
-    {
-      "name": "list_observable_projects",
-      "description": "List projects with observable agent-session history"
-    },
-    {
-      "name": "scan_context_signals",
-      "description": "Mine session history for repeated instructions, corrections, and rejections"
-    },
-    {
-      "name": "distill_context_proposals",
-      "description": "Distill signals into evidence-backed CLAUDE.md/AGENTS.md proposals"
-    },
-    {
-      "name": "distill_global_context",
-      "description": "Distill cross-project rules about how you work into ~/.claude/CLAUDE.md proposals"
-    },
-    {
-      "name": "apply_context_proposals",
-      "description": "Apply the user's accept/reject decisions to pending proposals"
-    },
-    {
-      "name": "find_stale_context",
-      "description": "Find context-file references the repo has outgrown"
-    }
-  ],
   "keywords": [
     "claude-code",
     "context-engineering",
