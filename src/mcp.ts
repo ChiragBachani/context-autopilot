@@ -24,7 +24,7 @@ const PROTOCOL_VERSION = '2025-06-18';
  * this first and agents summarized the evidence away when presenting.
  */
 const PRESENTATION_RULES =
-  'HOW TO PRESENT THESE TO THE USER (required): show every proposal with its evidence quotes VERBATIM — the quotes are the user\'s own past words and are the entire justification for each rule; never omit or paraphrase them. Then ask which proposals to accept or reject, and only after the user answers, call apply_context_proposals with their exact decisions. Do not apply anything they have not explicitly approved.';
+  'HOW TO PRESENT THESE TO THE USER (required): first, in your message text, show every proposal with its evidence quotes VERBATIM — the quotes are the user\'s own past words and are the entire justification for each rule; never omit or paraphrase them. If your client has a structured question/checkbox tool for collecting decisions, use it AFTER the evidence is shown in text — its option descriptions are too small for evidence, so it must never be the only presentation. Only after the user answers, call apply_context_proposals with their exact decisions. Do not apply anything they have not explicitly approved.';
 
 const TOOLS = [
   {
