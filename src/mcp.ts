@@ -15,8 +15,16 @@ import { applyDecisions, readExistingContext, renderProposalPreview, saveProposa
 import { recordDistilledSignals } from './state.js';
 import type { ProposalFile } from './types.js';
 
-const SERVER = { name: 'context-autopilot', version: '0.1.0' };
+const SERVER = { name: 'context-autopilot', version: '0.4.1' };
 const PROTOCOL_VERSION = '2025-06-18';
+
+/**
+ * Appended after proposal previews. Placed last because models weight the
+ * end of a long tool result most when deciding what to do next — v0.4.0 put
+ * this first and agents summarized the evidence away when presenting.
+ */
+const PRESENTATION_RULES =
+  'HOW TO PRESENT THESE TO THE USER (required): show every proposal with its evidence quotes VERBATIM — the quotes are the user\'s own past words and are the entire justification for each rule; never omit or paraphrase them. Then ask which proposals to accept or reject, and only after the user answers, call apply_context_proposals with their exact decisions. Do not apply anything they have not explicitly approved.';
 
 const TOOLS = [
   {
@@ -191,7 +199,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     };
     const saved = await saveProposals(file);
     const previews = proposals.map((p, i) => renderProposalPreview(p, i, proposals.length)).join('\n');
-    return `${proposals.length} global proposal(s) saved to ${saved}. Present each to the user with its evidence and ask which to accept, then call apply_context_proposals with global=true and their exact decisions.\n${previews}`;
+    return `${proposals.length} global proposal(s) saved to ${saved}.\n${previews}\n\n${PRESENTATION_RULES} For these global proposals, call apply_context_proposals with global=true.`;
   }
   if (name === 'distill_context_proposals') {
     const { project, observations } = await findProject(args.project_path as string | undefined);
@@ -213,7 +221,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     };
     const saved = await saveProposals(file);
     const previews = proposals.map((p, i) => renderProposalPreview(p, i, proposals.length)).join('\n');
-    return `${proposals.length} proposal(s) saved to ${saved}. Present each to the user with its evidence and ask which to accept, then call apply_context_proposals with their exact decisions.\n${previews}`;
+    return `${proposals.length} proposal(s) saved to ${saved}.\n${previews}\n\n${PRESENTATION_RULES}`;
   }
   throw new Error(`Unknown tool: ${name}`);
 }
