@@ -2,19 +2,21 @@
 /**
  * ctxlayer — Context Autopilot CLI.
  *
- *   ctxlayer projects            list observable projects
+ *   ctxlayer projects            list observable projects (all sources)
  *   ctxlayer scan                mine signals from this project's sessions
  *   ctxlayer distill             scan + distill into proposals
  *   ctxlayer apply               review proposals and write accepted ones
+ *   ctxlayer stale               find context-file references the repo outgrew
  *   ctxlayer export              export distilled entries as AOP JSON
  */
 
 import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import { writeFile } from 'node:fs/promises';
-import { ClaudeCodeAdapter } from './sources/claude-code.js';
+import { discoverAll, observeProject, type SourceName } from './engine.js';
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
+import { findStaleReferences } from './stale.js';
 import {
   applyToFile,
   loadProposals,
@@ -22,11 +24,13 @@ import {
   renderProposalPreview,
   saveProposals,
 } from './propose.js';
-import type { ObservedProject, ProposalFile, ProposalTarget, Signal } from './types.js';
+import type { ProposalFile, ProposalTarget, Signal } from './types.js';
+import type { DiscoveredProject } from './engine.js';
 
 interface Flags {
   project?: string;
   model?: string;
+  source: SourceName;
   json?: boolean;
   yes?: boolean;
   out?: string;
@@ -34,7 +38,7 @@ interface Flags {
 }
 
 function parseArgs(argv: string[]): { command: string; flags: Flags } {
-  const flags: Flags = { minScore: 4 };
+  const flags: Flags = { minScore: 4, source: 'all' };
   let command = 'help';
   const rest = [...argv];
   if (rest[0] && !rest[0].startsWith('-')) command = rest.shift()!;
@@ -49,6 +53,15 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
       case '-m':
         flags.model = rest.shift();
         break;
+      case '--source':
+      case '-s': {
+        const s = rest.shift();
+        if (s !== 'claude-code' && s !== 'cursor' && s !== 'all') {
+          fail(`--source must be claude-code, cursor, or all (got ${s})`);
+        }
+        flags.source = s;
+        break;
+      }
       case '--min-score':
         flags.minScore = Number(rest.shift() ?? '4');
         break;
@@ -79,46 +92,53 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-async function resolveProject(adapter: ClaudeCodeAdapter, flags: Flags): Promise<ObservedProject> {
-  const wanted = resolve(flags.project ?? process.cwd());
-  const projects = await adapter.discover();
-  const byPath = projects.find((p) => p.path && resolve(p.path) === wanted);
-  if (byPath) return byPath;
-  const bySlug = projects.find((p) => p.id === flags.project);
-  if (bySlug) return bySlug;
-  fail(
-    `No Claude Code sessions found for ${wanted}.\nRun \`ctxlayer projects\` to see observable projects, then pass one with --project <path>.`,
-  );
+function projectDir(flags: Flags): string {
+  return resolve(flags.project ?? process.cwd());
 }
 
-async function cmdProjects(adapter: ClaudeCodeAdapter): Promise<void> {
-  const projects = await adapter.discover();
+async function cmdProjects(flags: Flags): Promise<void> {
+  const projects = await discoverAll(flags.source);
+  if (flags.json) {
+    console.log(JSON.stringify(projects, null, 2));
+    return;
+  }
   if (projects.length === 0) {
-    console.log('No Claude Code projects found under ~/.claude/projects.');
+    console.log('No observable projects found (looked for Claude Code and Cursor session history).');
     return;
   }
   console.log(`Observable projects (${projects.length}):\n`);
   for (const p of projects) {
     const when = p.lastActivity ? p.lastActivity.slice(0, 10) : 'unknown';
+    const sources = Object.entries(p.sources)
+      .map(([name, count]) => `${name}: ${count} session(s)`)
+      .join(', ');
     console.log(`  ${p.path ?? p.id}`);
-    console.log(`      sessions: ${p.sessionCount}   last activity: ${when}`);
+    console.log(`      ${sources}   last activity: ${when}`);
   }
 }
 
-async function scanSignals(adapter: ClaudeCodeAdapter, flags: Flags): Promise<{ project: ObservedProject; signals: Signal[] }> {
-  const project = await resolveProject(adapter, flags);
-  const observations = await adapter.observe(project);
-  const signals = buildSignals(observations).filter((s) => s.score >= flags.minScore);
-  return { project, signals };
+async function scanSignals(flags: Flags): Promise<{ project: DiscoveredProject; signals: Signal[] }> {
+  const wanted = projectDir(flags);
+  const result = await observeProject(flags.project ?? wanted, flags.source);
+  if (!result) {
+    fail(
+      `No agent sessions found for ${wanted}.\nRun \`ctxlayer projects\` to see observable projects, then pass one with --project <path>.`,
+    );
+  }
+  const signals = buildSignals(result.observations).filter((s) => s.score >= flags.minScore);
+  return { project: result.project, signals };
 }
 
-async function cmdScan(adapter: ClaudeCodeAdapter, flags: Flags): Promise<void> {
-  const { project, signals } = await scanSignals(adapter, flags);
+async function cmdScan(flags: Flags): Promise<void> {
+  const { project, signals } = await scanSignals(flags);
   if (flags.json) {
     console.log(JSON.stringify({ project, signals }, null, 2));
     return;
   }
-  console.log(`\nScanned ${project.sessionCount} session(s) for ${project.path ?? project.id}`);
+  const sources = Object.entries(project.sources)
+    .map(([name, count]) => `${count} ${name} session(s)`)
+    .join(' + ');
+  console.log(`\nScanned ${sources} for ${project.path ?? project.id}`);
   if (signals.length === 0) {
     console.log('No durable signals found yet — signals build up as you work with your agent.');
     return;
@@ -132,8 +152,8 @@ async function cmdScan(adapter: ClaudeCodeAdapter, flags: Flags): Promise<void> 
   console.log(`\nNext: \`ctxlayer distill\` to turn these into CLAUDE.md / AGENTS.md proposals.`);
 }
 
-async function cmdDistill(adapter: ClaudeCodeAdapter, flags: Flags): Promise<void> {
-  const { project, signals } = await scanSignals(adapter, flags);
+async function cmdDistill(flags: Flags): Promise<void> {
+  const { project, signals } = await scanSignals(flags);
   if (signals.length === 0) {
     console.log('No durable signals found — nothing to distill yet.');
     return;
@@ -150,7 +170,7 @@ async function cmdDistill(adapter: ClaudeCodeAdapter, flags: Flags): Promise<voi
     version: 1,
     generatedAt: new Date().toISOString(),
     projectPath,
-    source: 'claude-code',
+    source: flags.source,
     proposals,
   };
   const saved = await saveProposals(file);
@@ -163,9 +183,8 @@ async function cmdDistill(adapter: ClaudeCodeAdapter, flags: Flags): Promise<voi
   }
 }
 
-async function cmdApply(adapter: ClaudeCodeAdapter, flags: Flags): Promise<void> {
-  const project = await resolveProject(adapter, flags);
-  const projectPath = project.path ?? process.cwd();
+async function cmdApply(flags: Flags): Promise<void> {
+  const projectPath = projectDir(flags);
   const file = await loadProposals(projectPath);
   if (!file || file.proposals.length === 0) {
     fail(`No proposals found for ${projectPath}. Run \`ctxlayer distill\` first.`);
@@ -218,9 +237,29 @@ async function applyAll(
   }
 }
 
-async function cmdExport(adapter: ClaudeCodeAdapter, flags: Flags): Promise<void> {
-  const project = await resolveProject(adapter, flags);
-  const projectPath = project.path ?? process.cwd();
+async function cmdStale(flags: Flags): Promise<void> {
+  const projectPath = projectDir(flags);
+  const findings = await findStaleReferences(projectPath);
+  if (flags.json) {
+    console.log(JSON.stringify({ projectPath, findings }, null, 2));
+    if (findings.length > 0) process.exitCode = 1;
+    return;
+  }
+  if (findings.length === 0) {
+    console.log(`No stale references found in ${projectPath} context files.`);
+    return;
+  }
+  console.log(`\n${findings.length} stale reference(s) in ${projectPath}:\n`);
+  for (const f of findings) {
+    console.log(`  ${f.file}:${f.line}  [${f.kind}]  ${f.reference}`);
+    console.log(`      ${f.detail}`);
+  }
+  console.log('\nStale context misleads agents — update or remove these references.');
+  process.exitCode = 1;
+}
+
+async function cmdExport(flags: Flags): Promise<void> {
+  const projectPath = projectDir(flags);
   const file = await loadProposals(projectPath);
   if (!file) fail(`No proposals found for ${projectPath}. Run \`ctxlayer distill\` first.`);
   const aop = {
@@ -241,18 +280,20 @@ https://thecontextlayer.ai
 Usage: ctxlayer <command> [options]
 
 Commands:
-  projects   List projects with observable agent sessions
+  projects   List projects with observable agent sessions (Claude Code + Cursor)
   scan       Mine repeated instructions, corrections & rejections from sessions
   distill    Distill signals into CLAUDE.md / AGENTS.md proposals
   apply      Review proposals interactively and write accepted ones
+  stale      Find context-file references the repo has outgrown (exit 1 if any)
   export     Export distilled entries as Agent Operating Procedure JSON
 
 Options:
   -p, --project <path>   Project to analyze (default: current directory)
+  -s, --source <name>    claude-code | cursor | all (default: all)
   -m, --model <model>    Model for distillation (default: your claude CLI default)
       --min-score <n>    Minimum signal strength (default: 4)
   -y, --yes              Accept all proposals without prompting
-      --json             Machine-readable output (scan)
+      --json             Machine-readable output (scan, projects, stale)
   -o, --out <file>       Output file (export)
 
 Distillation uses your local \`claude\` CLI (no API key needed), or the
@@ -261,18 +302,19 @@ Anthropic API when ANTHROPIC_API_KEY is set.`);
 
 async function main(): Promise<void> {
   const { command, flags } = parseArgs(process.argv.slice(2));
-  const adapter = new ClaudeCodeAdapter();
   switch (command) {
     case 'projects':
-      return cmdProjects(adapter);
+      return cmdProjects(flags);
     case 'scan':
-      return cmdScan(adapter, flags);
+      return cmdScan(flags);
     case 'distill':
-      return cmdDistill(adapter, flags);
+      return cmdDistill(flags);
     case 'apply':
-      return cmdApply(adapter, flags);
+      return cmdApply(flags);
+    case 'stale':
+      return cmdStale(flags);
     case 'export':
-      return cmdExport(adapter, flags);
+      return cmdExport(flags);
     default:
       return help();
   }

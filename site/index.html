@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>The Context Layer — Context Autopilot: automated context collection for coding agents</title>
 <meta name="description" content="Context Autopilot mines your real coding-agent sessions for the instructions you keep repeating and the corrections you keep making, and distills them into CLAUDE.md / AGENTS.md rules you approve. Plus the independent directory of the context layer.">
+<link rel="canonical" href="https://thecontextlayer.ai/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2300c8a0'/%3E%3Cstop offset='1' stop-color='%235b8aff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='url(%23g)'/%3E%3Crect x='7' y='9' width='18' height='3' rx='1.5' fill='%230a0e14'/%3E%3Crect x='7' y='15' width='13' height='3' rx='1.5' fill='%230a0e14'/%3E%3Crect x='7' y='21' width='8' height='3' rx='1.5' fill='%230a0e14'/%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://thecontextlayer.ai/">
+<meta property="og:site_name" content="The Context Layer">
+<meta property="og:title" content="Context Autopilot — you already taught your agent everything. It just wasn't listening.">
+<meta property="og:description" content="Mines your real Claude Code & Cursor sessions for repeated instructions and corrections, and distills them into CLAUDE.md / AGENTS.md rules you approve. Free, open source, 100% local.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Context Autopilot — automated context collection for coding agents">
+<meta name="twitter:description" content="Your session history is the highest-signal context source that exists. Autopilot turns it into durable agent context — with your approval.">
 <style>
   :root{
     --bg:#0a0e14; --bg2:#0f1522; --card:#131a2a; --border:#1f2a40;
@@ -99,7 +109,7 @@
     <h1>You already taught your agent everything.<br><span class="grad">It just wasn't listening.</span></h1>
     <p class="sub">Context Autopilot mines your real coding-agent sessions — every instruction you repeated, every correction you made, every action you rejected — and distills them into CLAUDE.md / AGENTS.md rules you approve. Automated context collection, grounded in evidence.</p>
     <span class="install"><span><span class="dollar">$</span> npx context-autopilot scan</span><button onclick="navigator.clipboard.writeText('npx context-autopilot scan')">copy</button></span>
-    <div class="meta">Zero dependencies · Runs 100% locally · Uses your existing <code>claude</code> CLI — no API key needed</div>
+    <div class="meta">Works with Claude Code &amp; Cursor · Zero dependencies · Runs 100% locally · No API key needed</div>
   </div>
 
   <section id="how">
@@ -109,7 +119,7 @@
       <div class="card">
         <div class="n">01 · OBSERVE</div>
         <h3>Mine your sessions</h3>
-        <p><code>ctxlayer scan</code> reads your local Claude Code transcripts and finds three kinds of evidence: instructions you repeated across sessions, corrections you made after the agent went wrong, and tool calls you rejected.</p>
+        <p><code>ctxlayer scan</code> reads your local Claude Code transcripts and Cursor sessions and finds three kinds of evidence: instructions you repeated across sessions, corrections you made after the agent went wrong, and tool calls you rejected.</p>
       </div>
       <div class="card">
         <div class="n">02 · DISTILL</div>
@@ -158,8 +168,8 @@ Distilling 26 signal(s) with your local `claude` CLI…<br><br>
         <p>When you tell an agent "no — like this" you are labeling training data for free. Autopilot only proposes rules your own words support, quotes them as evidence, and prefers fewer, higher-confidence rules over volume.</p>
       </div>
       <div class="card">
-        <h3>Works with every agent</h3>
-        <p>Output lands in both CLAUDE.md and AGENTS.md, so Claude Code, Cursor, Copilot, Codex, and 30+ other agents all benefit. Also ships as a Claude Code plugin and an MCP server.</p>
+        <h3>Works with every agent — and stays fresh</h3>
+        <p>Output lands in both CLAUDE.md and AGENTS.md, so Claude Code, Cursor, Copilot, Codex, and 30+ other agents all benefit. And <code>ctxlayer stale</code> catches the reverse problem: context your repo has outgrown — missing files, removed npm scripts — before it misleads an agent. CI-friendly (exit 1 on findings).</p>
       </div>
       <div class="card">
         <h3>Coding agents are chapter one</h3>

@@ -5,11 +5,12 @@
  */
 
 import { createInterface } from 'node:readline';
-import { ClaudeCodeAdapter } from './sources/claude-code.js';
+import { discoverAll, observeProject, type ObservedResult } from './engine.js';
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
+import { findStaleReferences } from './stale.js';
 import { readExistingContext, renderProposalPreview, saveProposals } from './propose.js';
-import type { ObservedProject, ProposalFile } from './types.js';
+import type { ProposalFile } from './types.js';
 
 const SERVER = { name: 'context-autopilot', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
@@ -18,8 +19,23 @@ const TOOLS = [
   {
     name: 'list_observable_projects',
     description:
-      'List projects that have Claude Code session history available for context mining.',
+      'List projects that have agent session history (Claude Code or Cursor) available for context mining.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'find_stale_context',
+    description:
+      "Check a project's CLAUDE.md / AGENTS.md for references the repo has outgrown: files that no longer exist and npm scripts that were removed. Returns findings as JSON.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_path: {
+          type: 'string',
+          description: 'Absolute path of the project. Defaults to the current working directory.',
+        },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: 'scan_context_signals',
@@ -53,32 +69,34 @@ const TOOLS = [
   },
 ];
 
-const adapter = new ClaudeCodeAdapter();
-
-async function findProject(projectPath?: string): Promise<ObservedProject> {
+async function findProject(projectPath?: string): Promise<ObservedResult> {
   const wanted = projectPath ?? process.cwd();
-  const projects = await adapter.discover();
-  const match = projects.find((p) => p.path === wanted);
-  if (!match) {
+  const result = await observeProject(wanted);
+  if (!result) {
     throw new Error(
-      `No Claude Code sessions found for ${wanted}. Use list_observable_projects to see what can be scanned.`,
+      `No agent sessions found for ${wanted}. Use list_observable_projects to see what can be scanned.`,
     );
   }
-  return match;
+  return result;
 }
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   if (name === 'list_observable_projects') {
-    const projects = await adapter.discover();
+    const projects = await discoverAll();
     return JSON.stringify(projects, null, 2);
   }
+  if (name === 'find_stale_context') {
+    const projectPath = (args.project_path as string | undefined) ?? process.cwd();
+    const findings = await findStaleReferences(projectPath);
+    return JSON.stringify({ projectPath, findingCount: findings.length, findings }, null, 2);
+  }
   if (name === 'scan_context_signals') {
-    const project = await findProject(args.project_path as string | undefined);
-    const observations = await adapter.observe(project);
+    const { project, observations } = await findProject(args.project_path as string | undefined);
     const signals = buildSignals(observations).filter((s) => s.score >= 4);
     return JSON.stringify(
       {
         project: project.path ?? project.id,
+        sources: project.sources,
         signalCount: signals.length,
         signals: signals.map((s) => ({
           kind: s.kind,
@@ -93,9 +111,8 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     );
   }
   if (name === 'distill_context_proposals') {
-    const project = await findProject(args.project_path as string | undefined);
+    const { project, observations } = await findProject(args.project_path as string | undefined);
     const projectPath = project.path ?? process.cwd();
-    const observations = await adapter.observe(project);
     const signals = buildSignals(observations).filter((s) => s.score >= 4);
     if (signals.length === 0) return 'No durable signals found — nothing to distill yet.';
     const existingContext = await readExistingContext(projectPath);
@@ -107,7 +124,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       version: 1,
       generatedAt: new Date().toISOString(),
       projectPath,
-      source: 'claude-code',
+      source: 'all',
       proposals,
     };
     const saved = await saveProposals(file);

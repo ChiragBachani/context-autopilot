@@ -1,6 +1,6 @@
 {
   "name": "context-autopilot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Automated context collection for coding agents. Watches your real agent sessions, finds what you keep repeating and correcting, and distills it into CLAUDE.md / AGENTS.md — with diffs you approve.",
   "keywords": [
     "claude-code",
@@ -32,7 +32,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "test": "npm run build && node --test 'test/*.test.ts'"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

@@ -33,7 +33,7 @@ Context Autopilot takes a third path: **evidence**. Your session history is a li
 
 ## How it works
 
-1. **Observe** — `ctxlayer scan` parses your local Claude Code transcripts (`~/.claude/projects`) and extracts three signal types: instructions repeated across sessions, corrections after the agent went wrong, and rejected tool calls. Runs 100% locally.
+1. **Observe** — `ctxlayer scan` parses your local Claude Code transcripts (`~/.claude/projects`) and Cursor sessions and extracts three signal types: instructions repeated across sessions, corrections after the agent went wrong, and rejected tool calls. Runs 100% locally.
 2. **Distill** — `ctxlayer distill` sends the signals (not your history) through Claude — via your existing `claude` CLI, no API key needed — and gets back imperative, project-specific rules with evidence and confidence ratings.
 3. **Approve** — `ctxlayer apply` walks you through each proposal. Accepted rules land in a managed block:
 
@@ -57,13 +57,16 @@ npm install -g context-autopilot   # or use npx, no install
 
 | Command | What it does |
 |---------|--------------|
-| `ctxlayer projects` | List projects with observable session history |
+| `ctxlayer projects` | List projects with observable session history (Claude Code + Cursor) |
 | `ctxlayer scan` | Mine signals from this project's sessions |
 | `ctxlayer distill` | Distill signals into proposals (`.ctxlayer/proposals.json`) |
 | `ctxlayer apply` | Review proposals interactively; write accepted ones |
+| `ctxlayer stale` | Find context-file references the repo has outgrown — missing files, removed npm scripts. Exits 1 on findings, so it drops straight into CI |
 | `ctxlayer export` | Export distilled entries as Agent Operating Procedure JSON |
 
-Options: `--project <path>`, `--model <model>`, `--min-score <n>`, `--yes`, `--json`.
+Options: `--project <path>`, `--source claude-code|cursor|all`, `--model <model>`, `--min-score <n>`, `--yes`, `--json`.
+
+Cursor session mining reads Cursor's local SQLite storage via Node's built-in `node:sqlite` (Node 22+; on older Node the Cursor source is skipped gracefully).
 
 ### Claude Code plugin
 
@@ -87,7 +90,7 @@ Then ask Claude to "update project context from my session history."
 }
 ```
 
-Exposes `list_observable_projects`, `scan_context_signals`, and `distill_context_proposals`.
+Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_proposals`, and `find_stale_context`.
 
 ## Privacy
 
@@ -97,8 +100,8 @@ Everything runs on your machine. Transcripts are parsed locally; only the extrac
 
 Coding agents are chapter one. The engine is source-agnostic — it distills *observations of work* into Agent Operating Procedures (AOPs):
 
-- **Now:** Claude Code transcripts → CLAUDE.md / AGENTS.md
-- **Next:** Cursor session logs; staleness detection (flag rules the repo has outgrown); team-shared context
+- **Now:** Claude Code + Cursor sessions → CLAUDE.md / AGENTS.md; staleness detection (`ctxlayer stale`)
+- **Next:** team-shared context; a GitHub Action for context linting in CI
 - **Later:** browser-workflow observation → AOPs for web tasks; ambient capture — until agents absorb the work you repeat, without you ever "building an agent"
 
 ## License
