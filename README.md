@@ -105,6 +105,14 @@ Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_pro
 
 The approval loop closes entirely inside chat: distill tools return each proposal with its evidence and instruct the agent to ask you which to accept; `apply_context_proposals` then writes **exactly** the titles you approved, remembers the ones you rejected (never re-proposed), and leaves the rest pending. No tool ever touches a context file without your explicit decision.
 
+## FAQ
+
+**How is this different from Claude Code's `/insights`?**
+`/insights` is the same core observation — instructions you repeat belong in CLAUDE.md — shipped as a personal usage *report*: an HTML page with suggestions you copy-paste by hand, Claude Code only. Context Autopilot is the pipeline version: it also mines **Cursor** history, attaches your **verbatim quotes as evidence** to every rule, runs an explicit **approve/reject** flow, writes accepted rules into **managed blocks** in both CLAUDE.md *and* AGENTS.md (so Codex/Copilot/Cursor benefit), maintains a **global cross-project rules file**, and adds a **CI staleness check**. Fully open source and local.
+
+**How is this different from Claude Code's auto-memory?**
+Auto-memory captures what the model notices *live, in the moment*, in one harness. Autopilot is retroactive and systematic: it mines months of existing history across tools, and finds cross-session patterns (you said it 6× in 4 sessions) that no single live session can see.
+
 ## Troubleshooting
 
 - **"Skill not found" / agent can't see the tools** — MCP servers load at session start. After installing, start a **new** session (resumed/old sessions won't have the tools), and say "MCP tools" rather than a slash command: *"Using the context-autopilot MCP tools, distill this project's context proposals."*
