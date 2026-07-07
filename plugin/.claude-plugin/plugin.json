@@ -1,7 +1,7 @@
 {
   "name": "context-autopilot",
   "description": "Automated context collection: mine your past agent sessions for repeated instructions and corrections, and distill them into CLAUDE.md / AGENTS.md with your approval.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "The Context Layer",
     "url": "https://thecontextlayer.ai"

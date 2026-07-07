@@ -16,42 +16,61 @@ export interface DistillOptions {
   /** Existing context files, so the distiller can dedupe against them. */
   existingContext?: string;
   model?: string;
+  /**
+   * 'project' (default): distill repo-specific conventions for the project's
+   * context file. 'global': distill cross-project rules about how the
+   * developer works, for their personal global context file.
+   */
+  scope?: 'project' | 'global';
 }
 
 export async function distill(signals: Signal[], opts: DistillOptions = {}): Promise<Proposal[]> {
-  const prompt = buildPrompt(signals.slice(0, MAX_SIGNALS), opts.existingContext);
+  const scope = opts.scope ?? 'project';
+  const prompt = buildPrompt(signals.slice(0, MAX_SIGNALS), scope, opts.existingContext);
   const raw = process.env.ANTHROPIC_API_KEY
     ? await callApi(prompt, opts.model)
     : callClaudeCli(prompt, opts.model);
   const entries = parseEntries(raw);
   return entries.map((entry) => ({
     entry,
-    targets: ['CLAUDE.md', 'AGENTS.md'],
+    // Global rules live only in the user's ~/.claude/CLAUDE.md — there is no
+    // standard global AGENTS.md location (yet).
+    targets: scope === 'global' ? ['CLAUDE.md'] : ['CLAUDE.md', 'AGENTS.md'],
     status: 'pending',
   }));
 }
 
-function buildPrompt(signals: Signal[], existingContext?: string): string {
+const PROJECT_BRIEF = `Your job: distill ONLY the durable, project-specific conventions worth writing into the project's agent context file (CLAUDE.md / AGENTS.md). These are rules the agent should follow in EVERY future session.
+
+Rules:
+- Only include rules that are non-obvious and project-specific. Skip generic best practices, one-off task content, and anything an agent would do anyway.`;
+
+const GLOBAL_BRIEF = `Your job: distill ONLY durable rules about HOW this developer wants agents to work, applicable across ALL their projects — their personal global context file (~/.claude/CLAUDE.md). Think: verification effort ("don't over-verify routine fixes"), planning style ("present a rundown before acting"), communication preferences, workflow habits.
+
+Rules:
+- Never include project-specific facts (file names, stacks, product behavior) — those belong in per-project context files, not here. A rule that mentions a specific project is wrong by definition.
+- Prefer signals that recur across multiple projects, and explicit meta-feedback about the agent's behavior even if seen once.`;
+
+function buildPrompt(signals: Signal[], scope: 'project' | 'global', existingContext?: string): string {
   const evidence = signals
     .map((s, i) => {
       const quotes = s.observations
         .slice(0, MAX_EVIDENCE_PER_SIGNAL)
         .map((o) => {
           const when = o.timestamp ? o.timestamp.slice(0, 10) : 'unknown date';
+          const where = o.project ? `, project ${o.project.split('/').pop()}` : '';
           const ctx = o.agentContext ? `\n    (agent was doing: ${clip(o.agentContext, 160)})` : '';
-          return `  - [${when}, session ${o.sessionId.slice(0, 8)}] "${clip(o.text, MAX_QUOTE_CHARS)}"${ctx}`;
+          return `  - [${when}${where}, session ${o.sessionId.slice(0, 8)}] "${clip(o.text, MAX_QUOTE_CHARS)}"${ctx}`;
         })
         .join('\n');
-      return `### Signal ${i + 1} — ${s.kind} (seen in ${s.sessions} session${s.sessions === 1 ? '' : 's'}, ${s.observations.length}×)\n${quotes}`;
+      const spread = `seen in ${s.sessions} session${s.sessions === 1 ? '' : 's'}${s.projects > 1 ? ` across ${s.projects} projects` : ''}, ${s.observations.length}×`;
+      return `### Signal ${i + 1} — ${s.kind} (${spread})\n${quotes}`;
     })
     .join('\n\n');
 
   return `You are a context distiller for AI coding agents. Below are signals mined from a developer's real agent sessions: instructions they repeated across sessions, corrections they made when the agent got something wrong, and tool calls they rejected.
 
-Your job: distill ONLY the durable, project-specific conventions worth writing into the project's agent context file (CLAUDE.md / AGENTS.md). These are rules the agent should follow in EVERY future session.
-
-Rules:
-- Only include rules that are non-obvious and project-specific. Skip generic best practices, one-off task content, and anything an agent would do anyway.
+${scope === 'global' ? GLOBAL_BRIEF : PROJECT_BRIEF}
 - Each rule must be imperative and at most 2 sentences.
 - Ground every rule in the evidence: only propose what the quotes actually support.
 - If the existing context file already covers a rule, skip it.

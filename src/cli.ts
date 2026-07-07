@@ -11,9 +11,10 @@
  */
 
 import { createInterface } from 'node:readline/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { writeFile } from 'node:fs/promises';
-import { discoverAll, observeProject, type SourceName } from './engine.js';
+import { discoverAll, observeEverything, observeProject, type SourceName } from './engine.js';
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
 import { findStaleReferences } from './stale.js';
@@ -25,12 +26,12 @@ import {
   saveProposals,
 } from './propose.js';
 import type { ProposalFile, ProposalTarget, Signal } from './types.js';
-import type { DiscoveredProject } from './engine.js';
 
 interface Flags {
   project?: string;
   model?: string;
   source: SourceName;
+  global?: boolean;
   json?: boolean;
   yes?: boolean;
   out?: string;
@@ -62,6 +63,10 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
         flags.source = s;
         break;
       }
+      case '--global':
+      case '-g':
+        flags.global = true;
+        break;
       case '--min-score':
         flags.minScore = Number(rest.shift() ?? '4');
         break;
@@ -117,7 +122,26 @@ async function cmdProjects(flags: Flags): Promise<void> {
   }
 }
 
-async function scanSignals(flags: Flags): Promise<{ project: DiscoveredProject; signals: Signal[] }> {
+interface ScanResult {
+  /** What was scanned, for display. */
+  scanned: string;
+  /** Where proposals and context files live for this scope. */
+  rootPath: string;
+  signals: Signal[];
+}
+
+/** Global mode reads/writes the user's personal context under ~/.claude. */
+function globalRoot(): string {
+  return join(homedir(), '.claude');
+}
+
+async function scanSignals(flags: Flags): Promise<ScanResult> {
+  if (flags.global) {
+    const observations = await observeEverything(flags.source);
+    const projects = new Set(observations.map((o) => o.project)).size;
+    const signals = buildSignals(observations).filter((s) => s.score >= flags.minScore);
+    return { scanned: `${projects} project(s) (global)`, rootPath: globalRoot(), signals };
+  }
   const wanted = projectDir(flags);
   const result = await observeProject(flags.project ?? wanted, flags.source);
   if (!result) {
@@ -125,20 +149,20 @@ async function scanSignals(flags: Flags): Promise<{ project: DiscoveredProject; 
       `No agent sessions found for ${wanted}.\nRun \`ctxlayer projects\` to see observable projects, then pass one with --project <path>.`,
     );
   }
+  const sources = Object.entries(result.project.sources)
+    .map(([name, count]) => `${count} ${name} session(s)`)
+    .join(' + ');
   const signals = buildSignals(result.observations).filter((s) => s.score >= flags.minScore);
-  return { project: result.project, signals };
+  return { scanned: `${sources} for ${result.project.path ?? result.project.id}`, rootPath: result.project.path ?? process.cwd(), signals };
 }
 
 async function cmdScan(flags: Flags): Promise<void> {
-  const { project, signals } = await scanSignals(flags);
+  const { scanned, signals } = await scanSignals(flags);
   if (flags.json) {
-    console.log(JSON.stringify({ project, signals }, null, 2));
+    console.log(JSON.stringify({ scanned, signals }, null, 2));
     return;
   }
-  const sources = Object.entries(project.sources)
-    .map(([name, count]) => `${count} ${name} session(s)`)
-    .join(' + ');
-  console.log(`\nScanned ${sources} for ${project.path ?? project.id}`);
+  console.log(`\nScanned ${scanned}`);
   if (signals.length === 0) {
     console.log('No durable signals found yet — signals build up as you work with your agent.');
     return;
@@ -146,22 +170,26 @@ async function cmdScan(flags: Flags): Promise<void> {
   console.log(`Found ${signals.length} signal(s):\n`);
   for (const s of signals) {
     const label = { 'repeated-instruction': 'REPEATED', correction: 'CORRECTION', rejection: 'REJECTION' }[s.kind];
-    console.log(`  [${label}] ×${s.observations.length} across ${s.sessions} session(s)  (score ${s.score})`);
+    const spread = s.projects > 1 ? `${s.sessions} session(s), ${s.projects} projects` : `${s.sessions} session(s)`;
+    console.log(`  [${label}] ×${s.observations.length} across ${spread}  (score ${s.score})`);
     console.log(`      "${s.summary.replace(/\s+/g, ' ').slice(0, 160)}"`);
   }
-  console.log(`\nNext: \`ctxlayer distill\` to turn these into CLAUDE.md / AGENTS.md proposals.`);
+  console.log(`\nNext: \`ctxlayer distill${flags.global ? ' --global' : ''}\` to turn these into context proposals.`);
 }
 
 async function cmdDistill(flags: Flags): Promise<void> {
-  const { project, signals } = await scanSignals(flags);
+  const { rootPath, signals } = await scanSignals(flags);
   if (signals.length === 0) {
     console.log('No durable signals found — nothing to distill yet.');
     return;
   }
-  const projectPath = project.path ?? process.cwd();
   console.log(`Distilling ${signals.length} signal(s) with ${process.env.ANTHROPIC_API_KEY ? 'the Anthropic API' : 'your local `claude` CLI'}…`);
-  const existingContext = await readExistingContext(projectPath);
-  const proposals = await distill(signals, { existingContext, model: flags.model });
+  const existingContext = await readExistingContext(rootPath);
+  const proposals = await distill(signals, {
+    existingContext,
+    model: flags.model,
+    scope: flags.global ? 'global' : 'project',
+  });
   if (proposals.length === 0) {
     console.log('The distiller found nothing durable enough to propose. Good sign — your context files may already cover it.');
     return;
@@ -169,7 +197,7 @@ async function cmdDistill(flags: Flags): Promise<void> {
   const file: ProposalFile = {
     version: 1,
     generatedAt: new Date().toISOString(),
-    projectPath,
+    projectPath: rootPath,
     source: flags.source,
     proposals,
   };
@@ -179,12 +207,12 @@ async function cmdDistill(flags: Flags): Promise<void> {
   if (flags.yes) {
     await applyAll(file, () => Promise.resolve(true));
   } else {
-    console.log(`\nNext: \`ctxlayer apply\` to review and write the ones you accept.`);
+    console.log(`\nNext: \`ctxlayer apply${flags.global ? ' --global' : ''}\` to review and write the ones you accept.`);
   }
 }
 
 async function cmdApply(flags: Flags): Promise<void> {
-  const projectPath = projectDir(flags);
+  const projectPath = flags.global ? globalRoot() : projectDir(flags);
   const file = await loadProposals(projectPath);
   if (!file || file.proposals.length === 0) {
     fail(`No proposals found for ${projectPath}. Run \`ctxlayer distill\` first.`);
@@ -259,7 +287,7 @@ async function cmdStale(flags: Flags): Promise<void> {
 }
 
 async function cmdExport(flags: Flags): Promise<void> {
-  const projectPath = projectDir(flags);
+  const projectPath = flags.global ? globalRoot() : projectDir(flags);
   const file = await loadProposals(projectPath);
   if (!file) fail(`No proposals found for ${projectPath}. Run \`ctxlayer distill\` first.`);
   const aop = {
@@ -289,6 +317,8 @@ Commands:
 
 Options:
   -p, --project <path>   Project to analyze (default: current directory)
+  -g, --global           Global mode: mine ALL projects for cross-project rules
+                         about how you work; writes to ~/.claude/CLAUDE.md
   -s, --source <name>    claude-code | cursor | all (default: all)
   -m, --model <model>    Model for distillation (default: your claude CLI default)
       --min-score <n>    Minimum signal strength (default: 4)

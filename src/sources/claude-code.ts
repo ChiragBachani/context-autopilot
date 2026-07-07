@@ -11,7 +11,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Observation, ObservedProject, SourceAdapter } from '../types.js';
-import { classifyCorrection, looksLikeInjectedContent } from '../extract.js';
+import { classifyCorrection, looksLikeHarnessBoilerplate, looksLikeInjectedContent } from '../extract.js';
 
 const REJECTION_MARKER = "doesn't want to proceed";
 const INTERRUPT_MARKER = '[Request interrupted by user';
@@ -165,7 +165,8 @@ export class ClaudeCodeAdapter implements SourceAdapter {
         if (!resultText.includes(REJECTION_MARKER)) continue;
         // The harness often appends the user's guidance after the rejection
         // boilerplate ("the user said: …" / "To tell you how to proceed…").
-        const guidance = extractRejectionGuidance(resultText);
+        let guidance = extractRejectionGuidance(resultText);
+        if (guidance && looksLikeHarnessBoilerplate(guidance)) guidance = undefined;
         observations.push({
           id: `${sessionId}:${n}`,
           source: this.name,

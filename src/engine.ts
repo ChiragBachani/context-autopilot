@@ -61,6 +61,26 @@ export interface ObservedResult {
 }
 
 /**
+ * Observe every project across every source, tagging each observation with
+ * its project path. This is the input for global (cross-project) context:
+ * rules about how the user works, rather than about any one repo.
+ */
+export async function observeEverything(source: SourceName = 'all'): Promise<Observation[]> {
+  const observations: Observation[] = [];
+  for (const adapter of getAdapters(source)) {
+    for (const project of await adapter.discover()) {
+      const label = project.path ?? project.id;
+      for (const obs of await adapter.observe(project)) {
+        obs.project = label;
+        observations.push(obs);
+      }
+    }
+  }
+  observations.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  return observations;
+}
+
+/**
  * Observe a project by path (or adapter-specific id), merging observations
  * from every source that knows it.
  */

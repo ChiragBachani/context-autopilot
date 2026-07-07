@@ -5,7 +5,9 @@
  */
 
 import { createInterface } from 'node:readline';
-import { discoverAll, observeProject, type ObservedResult } from './engine.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { discoverAll, observeEverything, observeProject, type ObservedResult } from './engine.js';
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
 import { findStaleReferences } from './stale.js';
@@ -51,6 +53,12 @@ const TOOLS = [
       },
       additionalProperties: false,
     },
+  },
+  {
+    name: 'distill_global_context',
+    description:
+      "Mine ALL of the user's projects for cross-project signals about how they like agents to work (verification effort, planning style, workflow preferences) and distill them into proposals for their personal global context file (~/.claude/CLAUDE.md). Proposals are saved to ~/.claude/.ctxlayer/proposals.json for review; nothing is applied automatically. Can take a minute.",
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'distill_context_proposals',
@@ -109,6 +117,27 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       null,
       2,
     );
+  }
+  if (name === 'distill_global_context') {
+    const rootPath = join(homedir(), '.claude');
+    const observations = await observeEverything();
+    const signals = buildSignals(observations).filter((s) => s.score >= 4);
+    if (signals.length === 0) return 'No durable cross-project signals found yet.';
+    const existingContext = await readExistingContext(rootPath);
+    const proposals = await distill(signals, { existingContext, scope: 'global' });
+    if (proposals.length === 0) {
+      return 'The distiller found no durable cross-project rules to propose.';
+    }
+    const file: ProposalFile = {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      projectPath: rootPath,
+      source: 'all',
+      proposals,
+    };
+    const saved = await saveProposals(file);
+    const previews = proposals.map((p, i) => renderProposalPreview(p, i, proposals.length)).join('\n');
+    return `${proposals.length} global proposal(s) saved to ${saved}. Review each with the user before applying (\`ctxlayer apply --global\`).\n${previews}`;
   }
   if (name === 'distill_context_proposals') {
     const { project, observations } = await findProject(args.project_path as string | undefined);

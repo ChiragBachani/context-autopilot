@@ -64,7 +64,15 @@ npm install -g context-autopilot   # or use npx, no install
 | `ctxlayer stale` | Find context-file references the repo has outgrown — missing files, removed npm scripts. Exits 1 on findings, so it drops straight into CI |
 | `ctxlayer export` | Export distilled entries as Agent Operating Procedure JSON |
 
-Options: `--project <path>`, `--source claude-code|cursor|all`, `--model <model>`, `--min-score <n>`, `--yes`, `--json`.
+### Global mode
+
+```bash
+ctxlayer distill --global
+```
+
+Project context files hold repo conventions — but some feedback is about *you*: "explain things in plain English", "don't build while I'm brainstorming", "run independent work in parallel". Global mode mines **all** your projects across **all** your tools for exactly that, and maintains a managed block in your personal `~/.claude/CLAUDE.md`, so every future session in every project starts already knowing how you like to work. Rules that mention a specific project are excluded by design — those belong in the project's own context file.
+
+Options: `--project <path>`, `--global`, `--source claude-code|cursor|all`, `--model <model>`, `--min-score <n>`, `--yes`, `--json`.
 
 Cursor session mining reads Cursor's local SQLite storage via Node's built-in `node:sqlite` (Node 22+; on older Node the Cursor source is skipped gracefully).
 
@@ -90,7 +98,7 @@ Then ask Claude to "update project context from my session history."
 }
 ```
 
-Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_proposals`, and `find_stale_context`.
+Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_proposals`, `distill_global_context`, and `find_stale_context`.
 
 ## Privacy
 
@@ -100,7 +108,7 @@ Everything runs on your machine. Transcripts are parsed locally; only the extrac
 
 Coding agents are chapter one. The engine is source-agnostic — it distills *observations of work* into Agent Operating Procedures (AOPs):
 
-- **Now:** Claude Code + Cursor sessions → CLAUDE.md / AGENTS.md; staleness detection (`ctxlayer stale`)
+- **Now:** Claude Code + Cursor sessions → CLAUDE.md / AGENTS.md; global cross-project rules (`--global`); staleness detection (`ctxlayer stale`)
 - **Next:** team-shared context; a GitHub Action for context linting in CI
 - **Later:** browser-workflow observation → AOPs for web tasks; ambient capture — until agents absorb the work you repeat, without you ever "building an agent"
 

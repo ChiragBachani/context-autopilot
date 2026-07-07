@@ -23,6 +23,8 @@ export interface Observation {
   /** ISO 8601. */
   timestamp: string;
   sessionId: string;
+  /** Project the observation came from (set when aggregating across projects). */
+  project?: string;
   /** The human-readable content of the observation. */
   text: string;
   /** What the agent was doing when this happened (for corrections/rejections). */
@@ -56,6 +58,8 @@ export interface Signal {
   observations: Observation[];
   /** Number of distinct sessions the observations span. */
   sessions: number;
+  /** Number of distinct projects the observations span (1 unless aggregating). */
+  projects: number;
   /** Heuristic strength; higher = more likely to be durable context. */
   score: number;
 }

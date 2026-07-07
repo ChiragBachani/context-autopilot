@@ -109,7 +109,7 @@
     <h1>You already taught your agent everything.<br><span class="grad">It just wasn't listening.</span></h1>
     <p class="sub">Context Autopilot mines your real coding-agent sessions — every instruction you repeated, every correction you made, every action you rejected — and distills them into CLAUDE.md / AGENTS.md rules you approve. Automated context collection, grounded in evidence.</p>
     <span class="install"><span><span class="dollar">$</span> npx context-autopilot scan</span><button onclick="navigator.clipboard.writeText('npx context-autopilot scan')">copy</button></span>
-    <div class="meta">Works with Claude Code &amp; Cursor · Zero dependencies · Runs 100% locally · No API key needed</div>
+    <div class="meta">Works with Claude Code &amp; Cursor · Project + global rules · Zero dependencies · 100% local · No API key needed</div>
   </div>
 
   <section id="how">
@@ -172,8 +172,8 @@ Distilling 26 signal(s) with your local `claude` CLI…<br><br>
         <p>Output lands in both CLAUDE.md and AGENTS.md, so Claude Code, Cursor, Copilot, Codex, and 30+ other agents all benefit. And <code>ctxlayer stale</code> catches the reverse problem: context your repo has outgrown — missing files, removed npm scripts — before it misleads an agent. CI-friendly (exit 1 on findings).</p>
       </div>
       <div class="card">
-        <h3>Coding agents are chapter one</h3>
-        <p>The engine is source-agnostic: it distills <em>observations of work</em> into Agent Operating Procedures. Coding transcripts are the first source. Browser workflows and ambient capture are next — until agents absorb the work you repeat, without you ever "building an agent."</p>
+        <h3>It learns <em>you</em>, not just your repo</h3>
+        <p><code>ctxlayer distill --global</code> mines all your projects across all your tools for rules about how you work — "explain in plain English", "don't build while I'm brainstorming", "parallelize independent tasks" — and maintains them in your personal ~/.claude/CLAUDE.md. No other tool does evidence-based personal context. It's the first step toward the endgame: agents that absorb how you work without you ever "building an agent."</p>
       </div>
     </div>
   </section>

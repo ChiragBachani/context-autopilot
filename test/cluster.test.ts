@@ -41,6 +41,20 @@ test('a single correction is signal-worthy', () => {
   assert.ok(corrections[0].score >= 4, 'correction score should clear the default threshold');
 });
 
+test('signals spanning multiple projects score higher and count projects', () => {
+  const single = buildSignals([
+    obs({ text: 'Give me a rundown first, do not take any actions yet', sessionId: 's1', project: '/a' }),
+    obs({ text: 'Give me a rundown first and do not take any actions yet', sessionId: 's2', project: '/a' }),
+  ]);
+  const cross = buildSignals([
+    obs({ text: 'Give me a rundown first, do not take any actions yet', sessionId: 's1', project: '/a' }),
+    obs({ text: 'Give me a rundown first and do not take any actions yet', sessionId: 's2', project: '/b' }),
+  ]);
+  assert.equal(single[0].projects, 1);
+  assert.equal(cross[0].projects, 2);
+  assert.ok(cross[0].score > single[0].score, 'cross-project recurrence should outscore same-project');
+});
+
 test('signals are sorted by score descending', () => {
   const signals = buildSignals([
     obs({ text: 'Never hardcode colors', kind: 'correction', sessionId: 's1' }),

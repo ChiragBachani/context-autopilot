@@ -10,15 +10,19 @@ import type { Observation, Signal } from './types.js';
 const SIMILARITY_THRESHOLD = 0.3;
 /** Very long prompts are usually one-off task specs, not durable conventions. */
 const MAX_INSTRUCTION_WORDS = 250;
+/** Very short messages ("Yes", "does this look right?") carry no convention. */
+const MIN_INSTRUCTION_WORDS = 4;
 
 export function buildSignals(observations: Observation[]): Signal[] {
   const signals: Signal[] = [];
 
   const corrections = observations.filter((o) => o.kind === 'correction');
   const rejections = observations.filter((o) => o.kind === 'rejection');
-  const instructions = observations.filter(
-    (o) => o.kind === 'instruction' && normalizeForSimilarity(o.text).length <= MAX_INSTRUCTION_WORDS,
-  );
+  const instructions = observations.filter((o) => {
+    if (o.kind !== 'instruction') return false;
+    const words = normalizeForSimilarity(o.text).length;
+    return words >= MIN_INSTRUCTION_WORDS && words <= MAX_INSTRUCTION_WORDS;
+  });
 
   // Greedy single-pass clustering of instructions by text similarity.
   const clusters: Observation[][] = [];
@@ -42,6 +46,7 @@ export function buildSignals(observations: Observation[]): Signal[] {
 
   for (const cluster of clusters) {
     const sessions = distinctSessions(cluster);
+    const projects = distinctProjects(cluster);
     // A convention is something you said more than once — require either
     // multiple sessions or 3+ repetitions inside one long session.
     if (sessions < 2 && cluster.length < 3) continue;
@@ -51,7 +56,9 @@ export function buildSignals(observations: Observation[]): Signal[] {
       summary: representative(cluster),
       observations: cluster,
       sessions,
-      score: sessions * 2 + cluster.length,
+      projects,
+      // Spanning multiple projects is the strongest recurrence signal there is.
+      score: sessions * 2 + cluster.length + (projects - 1) * 3,
     });
   }
 
@@ -59,25 +66,29 @@ export function buildSignals(observations: Observation[]): Signal[] {
   // a single correction is worth surfacing.
   for (const group of groupBySimilarity(corrections)) {
     const sessions = distinctSessions(group);
+    const projects = distinctProjects(group);
     signals.push({
       id: `co-${signals.length}`,
       kind: 'correction',
       summary: representative(group),
       observations: group,
       sessions,
-      score: sessions * 2 + group.length + 3,
+      projects,
+      score: sessions * 2 + group.length + 3 + (projects - 1) * 3,
     });
   }
 
   for (const group of groupBySimilarity(rejections.filter((r) => r.text.length > 40))) {
     const sessions = distinctSessions(group);
+    const projects = distinctProjects(group);
     signals.push({
       id: `re-${signals.length}`,
       kind: 'rejection',
       summary: representative(group),
       observations: group,
       sessions,
-      score: sessions * 2 + group.length + 4,
+      projects,
+      score: sessions * 2 + group.length + 4 + (projects - 1) * 3,
     });
   }
 
@@ -108,6 +119,10 @@ function groupBySimilarity(observations: Observation[]): Observation[][] {
 
 function distinctSessions(observations: Observation[]): number {
   return new Set(observations.map((o) => o.sessionId)).size;
+}
+
+function distinctProjects(observations: Observation[]): number {
+  return new Set(observations.map((o) => o.project ?? '')).size;
 }
 
 /** Pick the shortest observation as the cluster's representative text. */

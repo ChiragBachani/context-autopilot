@@ -31,13 +31,22 @@ export function classifyCorrection(text: string, ctx: CorrectionContext): boolea
  */
 export function looksLikeInjectedContent(text: string): boolean {
   const t = text.trimStart();
-  return (
+  if (
     t.startsWith('<') || // <command-name>, <system-reminder>, <task-notification>…
     t.startsWith('Caveat:') ||
     t.startsWith('[Request interrupted') ||
     t.startsWith('API Error') ||
     t.startsWith('Error:')
-  );
+  ) {
+    return true;
+  }
+  // Messages that are only pasted-attachment placeholders ("[Image #1]").
+  return t.replace(/\[(?:image|pasted text) #?\d*\]/gi, '').trim().length === 0;
+}
+
+/** Harness boilerplate that shows up inside tool results but isn't the user speaking. */
+export function looksLikeHarnessBoilerplate(text: string): boolean {
+  return /^the user (wants to clarify|doesn'?t want|answered|selected)/i.test(text.trim());
 }
 
 /**
