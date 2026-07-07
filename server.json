@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.chiragbachani/context-autopilot",
+  "description": "Mines your real Claude Code and Cursor sessions for repeated instructions and corrections, and distills them into CLAUDE.md / AGENTS.md rules you approve. Evidence-based, 100% local, zero dependencies.",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/ChiragBachani/context-autopilot",
+    "source": "github"
+  },
+  "version": "0.5.1",
+  "websiteUrl": "https://thecontextlayer.ai",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "context-autopilot",
+      "version": "0.5.1",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "-p",
+          "value": "context-autopilot",
+          "isRequired": true
+        },
+        {
+          "type": "positional",
+          "value": "ctxlayer-mcp",
+          "valueHint": "ctxlayer-mcp",
+          "isRequired": true
+        }
+      ]
+    }
+  ]
+}
