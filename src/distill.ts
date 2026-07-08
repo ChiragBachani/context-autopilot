@@ -24,12 +24,18 @@ export interface DistillOptions {
   scope?: 'project' | 'global';
 }
 
+/**
+ * Send a prompt through the user's model: Anthropic API when a key is set,
+ * their local `claude` CLI otherwise. Shared by signal and workflow distillers.
+ */
+export async function runModel(prompt: string, model?: string): Promise<string> {
+  return process.env.ANTHROPIC_API_KEY ? callApi(prompt, model) : callClaudeCli(prompt, model);
+}
+
 export async function distill(signals: Signal[], opts: DistillOptions = {}): Promise<Proposal[]> {
   const scope = opts.scope ?? 'project';
   const prompt = buildPrompt(signals.slice(0, MAX_SIGNALS), scope, opts.existingContext);
-  const raw = process.env.ANTHROPIC_API_KEY
-    ? await callApi(prompt, opts.model)
-    : callClaudeCli(prompt, opts.model);
+  const raw = await runModel(prompt, opts.model);
   const entries = parseEntries(raw);
   return entries.map((entry) => ({
     entry,

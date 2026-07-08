@@ -105,6 +105,26 @@ Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_pro
 
 The approval loop closes entirely inside chat: distill tools return each proposal with its evidence and instruct the agent to ask you which to accept; `apply_context_proposals` then writes **exactly** the titles you approved, remembers the ones you rejected (never re-proposed), and leaves the rest pending. No tool ever touches a context file without your explicit decision.
 
+## Ambient observation (macOS) — agents that absorb your work
+
+Coding transcripts are chapter one. `ctxlayer observe` is chapter two: it watches how you *work* — not just how you prompt — and turns repeated manual workflows into automations you approve.
+
+```
+$ ctxlayer observe --demo    # see the whole pipeline on synthetic data, zero permissions
+$ ctxlayer observe           # the real thing (walks you through the two macOS permission toggles)
+$ ctxlayer observe --install # background at login + nightly pattern mining
+```
+
+How it works:
+
+1. **Observe** — captures the screen at *intentional moments* only: the end of a burst of activity, dwelling on one window, switching context after real work. Never on a timer, never during video calls or anything blocklisted, and input activity is measured only as idle-time — no keylogging, ever.
+2. **Parse** — every capture is OCR'd **on-device** with Apple Vision. Screenshots never leave your Mac; they auto-delete after 14 days (or instantly, in text-only mode).
+3. **Mine** — sequences of app/window steps that recur across days become workflow candidates.
+4. **Surface** — candidates are distilled (via your own `claude` CLI) into Agent Operating Procedures — trigger, step-by-step procedure, evidence — and wait for your approval on the local dashboard at `http://localhost:4780`.
+5. **Automate** — approve one, and the next time you *start* that workflow, a notification offers to take over: one click opens a Claude Code session preloaded with the procedure.
+
+The dashboard (100% local, served from the observer itself) shows a live timeline of what was observed, patterns awaiting review, your automations, and the controls: a master **OFF** switch (instant, persistent), pause, blocklists, and delete-everything. `ctxlayer off` does the same from the terminal.
+
 ## FAQ
 
 **How is this different from Claude Code's `/insights`?**
@@ -126,9 +146,9 @@ Everything runs on your machine. Transcripts are parsed locally; only the extrac
 
 Coding agents are chapter one. The engine is source-agnostic — it distills *observations of work* into Agent Operating Procedures (AOPs):
 
-- **Now:** Claude Code + Cursor sessions → CLAUDE.md / AGENTS.md; global cross-project rules (`--global`); staleness detection (`ctxlayer stale`)
-- **Next:** team-shared context; a GitHub Action for context linting in CI
-- **Later:** browser-workflow observation → AOPs for web tasks; ambient capture — until agents absorb the work you repeat, without you ever "building an agent"
+- **Now:** Claude Code + Cursor sessions → CLAUDE.md / AGENTS.md; global cross-project rules (`--global`); staleness detection (`ctxlayer stale`); **ambient screen observation → workflow AOPs with live take-over offers (macOS)**
+- **Next:** team-shared context; a GitHub Action for context linting in CI; browser-workflow adapter
+- **Later:** fully hands-off AOP execution — agents absorb the work you repeat, without you ever "building an agent"
 
 ## License
 

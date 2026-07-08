@@ -14,7 +14,30 @@ import { createInterface } from 'node:readline/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { discoverAll, observeEverything, observeProject, type SourceName } from './engine.js';
+import { loadConfig, pauseFor, setEnabled } from './ambient/config.js';
+import { startDashboard } from './ambient/dashboard.js';
+import { enterDemoMode, runDemoPipeline } from './ambient/demo.js';
+import {
+  checkPermissions,
+  installLaunchAgents,
+  notify,
+  observerAlive,
+  runObserver,
+  uninstallLaunchAgents,
+} from './ambient/observer.js';
+import { dayKey, readAllDays, readDay } from './ambient/records.js';
+import {
+  applyWorkflowDecisions,
+  buildEpisodes,
+  distillWorkflows,
+  findWorkflowCandidates,
+  loadAops,
+  loadWorkflowProposals,
+  saveWorkflowProposals,
+} from './ambient/workflows.js';
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
 import { findStaleReferences } from './stale.js';
@@ -39,6 +62,14 @@ interface Flags {
   out?: string;
   minScore: number;
   threshold: number;
+  // ambient (observe / distill --source screen)
+  demo?: boolean;
+  install?: boolean;
+  uninstall?: boolean;
+  status?: boolean;
+  pause?: number;
+  agent?: boolean;
+  notify?: boolean;
 }
 
 function parseArgs(argv: string[]): { command: string; flags: Flags } {
@@ -60,12 +91,33 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
       case '--source':
       case '-s': {
         const s = rest.shift();
-        if (s !== 'claude-code' && s !== 'cursor' && s !== 'all') {
-          fail(`--source must be claude-code, cursor, or all (got ${s})`);
+        if (s !== 'claude-code' && s !== 'cursor' && s !== 'screen' && s !== 'all') {
+          fail(`--source must be claude-code, cursor, screen, or all (got ${s})`);
         }
         flags.source = s;
         break;
       }
+      case '--demo':
+        flags.demo = true;
+        break;
+      case '--install':
+        flags.install = true;
+        break;
+      case '--uninstall':
+        flags.uninstall = true;
+        break;
+      case '--status':
+        flags.status = true;
+        break;
+      case '--pause':
+        flags.pause = Number(rest.shift() ?? '30');
+        break;
+      case '--agent':
+        flags.agent = true;
+        break;
+      case '--notify':
+        flags.notify = true;
+        break;
       case '--global':
       case '-g':
         flags.global = true;
@@ -169,6 +221,7 @@ async function scanSignals(flags: Flags, opts?: { soft: boolean }): Promise<Scan
 }
 
 async function cmdScan(flags: Flags): Promise<void> {
+  if (flags.source === 'screen') return cmdScanScreen(flags);
   const { scanned, signals } = await scanSignals(flags);
   if (flags.json) {
     console.log(JSON.stringify({ scanned, signals }, null, 2));
@@ -190,6 +243,7 @@ async function cmdScan(flags: Flags): Promise<void> {
 }
 
 async function cmdDistill(flags: Flags): Promise<void> {
+  if (flags.source === 'screen') return cmdDistillScreen(flags);
   const { rootPath, signals } = await scanSignals(flags);
   if (signals.length === 0) {
     console.log('No durable signals found — nothing to distill yet.');
@@ -357,6 +411,201 @@ async function cmdExport(flags: Flags): Promise<void> {
   console.log(`Exported ${aop.entries.length} AOP entr(ies) to ${out}`);
 }
 
+// ---------------------------------------------------------------------------
+// Ambient screen observation
+
+function cliPath(): string {
+  return fileURLToPath(import.meta.url);
+}
+
+function openInBrowser(url: string): void {
+  spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
+}
+
+async function cmdObserve(flags: Flags): Promise<void> {
+  if (flags.demo) return cmdObserveDemo(flags);
+  if (flags.install) {
+    const written = installLaunchAgents(cliPath());
+    console.log('Installed background observation:');
+    for (const path of written) console.log(`  · ${path}`);
+    console.log('\nThe observer now starts at login, and your day is auto-mined for patterns every evening at 9pm.');
+    console.log('Remove everything with: ctxlayer observe --uninstall');
+    return;
+  }
+  if (flags.uninstall) {
+    const removed = uninstallLaunchAgents();
+    console.log(removed.length ? `Removed:\n${removed.map((p) => `  · ${p}`).join('\n')}` : 'Nothing was installed.');
+    return;
+  }
+  if (flags.status) return cmdObserveStatus();
+  if (flags.pause !== undefined) {
+    const config = pauseFor(flags.pause);
+    console.log(`Paused until ${new Date(config.pausedUntil!).toLocaleTimeString()}. Resume early with: ctxlayer on`);
+    return;
+  }
+
+  const started = await runObserver();
+  if (!started) process.exit(1);
+  const server = await startDashboard();
+  const port = loadConfig().dashboardPort;
+  if (server && !flags.agent) {
+    openInBrowser(`http://localhost:${port}`);
+    console.log(`dashboard open at http://localhost:${port} — leave this running; Ctrl-C stops observing.`);
+  }
+}
+
+async function cmdObserveStatus(): Promise<void> {
+  const config = loadConfig();
+  const permissions = await checkPermissions();
+  const paused = config.pausedUntil && new Date().toISOString() < config.pausedUntil;
+  const today = readDay(dayKey());
+  console.log(`Ambient observation: ${config.enabled ? (paused ? `PAUSED until ${config.pausedUntil}` : 'ON') : 'OFF'}`);
+  console.log(`Observer daemon:     ${observerAlive() ? 'running' : 'not running'}`);
+  console.log(`Permissions:         screen recording ${permissions.screen}, accessibility ${permissions.accessibility}`);
+  console.log(`Today:               ${today.length} moment(s) captured`);
+  console.log(`Dashboard:           http://localhost:${config.dashboardPort}`);
+  console.log(`Automations:         ${loadAops().length} AOP(s)`);
+}
+
+async function cmdObserveDemo(flags: Flags): Promise<void> {
+  enterDemoMode();
+  console.log('Context Autopilot — ambient demo (synthetic data, real pipeline, zero permissions needed)');
+  let port = loadConfig().dashboardPort;
+  let server = await startDashboard(port);
+  if (!server) {
+    port += 1;
+    server = await startDashboard(port);
+  }
+  if (server) openInBrowser(`http://localhost:${port}`);
+  await runDemoPipeline((line) => console.log(line), { model: flags.model });
+  console.log(`\nExplore the dashboard at http://localhost:${port} — approve the pattern on the Patterns tab,`);
+  console.log('then try "Run now" on the Automations tab. Ctrl-C when done.');
+}
+
+function cmdOnOff(enabled: boolean): void {
+  setEnabled(enabled);
+  if (enabled) {
+    console.log('Ambient observation is ON.');
+    if (!observerAlive()) console.log('The observer daemon is not running — start it with: ctxlayer observe');
+  } else {
+    console.log('Ambient observation is OFF — nothing will be captured until `ctxlayer on`. This survives restarts.');
+  }
+}
+
+async function cmdDashboard(): Promise<void> {
+  const port = loadConfig().dashboardPort;
+  const server = await startDashboard(port);
+  if (!server) {
+    // A daemon is already serving it — just open the page.
+    openInBrowser(`http://localhost:${port}`);
+    console.log(`dashboard already running at http://localhost:${port} — opened it.`);
+    return;
+  }
+  openInBrowser(`http://localhost:${port}`);
+  console.log(`dashboard at http://localhost:${port} — Ctrl-C to stop.`);
+}
+
+function screenCandidates() {
+  const episodesByDay = new Map<string, ReturnType<typeof buildEpisodes>>();
+  for (const [day, records] of readAllDays()) episodesByDay.set(day, buildEpisodes(day, records));
+  return findWorkflowCandidates(episodesByDay);
+}
+
+async function cmdScanScreen(flags: Flags): Promise<void> {
+  const byDay = readAllDays();
+  const candidates = screenCandidates();
+  if (flags.json) {
+    console.log(JSON.stringify({ days: byDay.size, candidates }, null, 2));
+    return;
+  }
+  const total = [...byDay.values()].reduce((n, r) => n + r.length, 0);
+  console.log(`\nScanned ${byDay.size} observed day(s), ${total} captured moment(s)`);
+  if (candidates.length === 0) {
+    console.log('No repeated workflows detected yet — patterns emerge once the same sequence shows up on 2+ days.');
+    return;
+  }
+  console.log(`Found ${candidates.length} workflow candidate(s):\n`);
+  for (const c of candidates) {
+    const steps = c.episodes[0].steps.map((s) => s.app).join(' → ');
+    console.log(`  [WORKFLOW] recurred on ${c.days.length} day(s) (${c.days.join(', ')})`);
+    console.log(`      ${steps}`);
+  }
+  console.log('\nNext: `ctxlayer distill --source screen` to turn these into automation proposals.');
+}
+
+async function cmdDistillScreen(flags: Flags): Promise<void> {
+  const candidates = screenCandidates();
+  if (candidates.length === 0) {
+    if (!flags.notify) console.log('No repeated workflows to distill yet.');
+    return;
+  }
+  if (!flags.notify) {
+    console.log(`Distilling ${candidates.length} workflow candidate(s) with ${process.env.ANTHROPIC_API_KEY ? 'the Anthropic API' : 'your local `claude` CLI'}…`);
+  }
+  const proposals = await distillWorkflows(candidates, { model: flags.model });
+  if (proposals.length === 0) {
+    if (!flags.notify) console.log('The distiller found no coherent workflows to propose.');
+    return;
+  }
+  saveWorkflowProposals(proposals);
+  if (flags.notify) {
+    // Nightly LaunchAgent path: surface quietly, never interrupt.
+    notify('Context Autopilot', `Found ${proposals.length} automatable pattern(s) in your day — open the dashboard to review.`);
+    return;
+  }
+  console.log(`\n${proposals.length} workflow proposal(s):\n`);
+  proposals.forEach((p, i) => {
+    const e = p.entry;
+    console.log(`[${i + 1}/${proposals.length}] ${e.title}  (confidence: ${e.confidence})`);
+    console.log(`    ${e.rule}`);
+    for (const step of e.procedure ?? []) console.log(`      · ${step}`);
+  });
+  console.log(`\nReview and approve on the dashboard (ctxlayer dashboard) or with: ctxlayer aop`);
+}
+
+async function cmdAop(flags: Flags): Promise<void> {
+  const file = loadWorkflowProposals();
+  const pending = file?.proposals.filter((p) => p.status === 'pending') ?? [];
+  const aops = loadAops();
+  if (flags.json) {
+    console.log(JSON.stringify({ pending, aops }, null, 2));
+    return;
+  }
+  if (aops.length > 0) {
+    console.log(`\n${aops.length} automation(s):`);
+    for (const aop of aops) {
+      console.log(`  ${aop.enabled ? '●' : '○'} ${aop.title}${aop.trigger ? `  (offers when: ${aop.trigger.app}${aop.trigger.titlePattern ? ` / "${aop.trigger.titlePattern}"` : ''})` : ''}`);
+    }
+  }
+  if (pending.length === 0) {
+    console.log(aops.length === 0 ? 'No automations and no pending proposals yet — run `ctxlayer distill --source screen` after a day of observing.' : '\nNo proposals pending review.');
+    return;
+  }
+  console.log(`\n${pending.length} proposal(s) pending review:`);
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const accept: string[] = [];
+  const reject: string[] = [];
+  try {
+    for (let i = 0; i < pending.length; i++) {
+      const e = pending[i].entry;
+      console.log(`\n[${i + 1}/${pending.length}] ${e.title}  (confidence: ${e.confidence})`);
+      console.log(`    ${e.rule}`);
+      for (const step of e.procedure ?? []) console.log(`      · ${step}`);
+      for (const ev of e.evidence.slice(0, 3)) console.log(`      evidence: ${ev.quote}`);
+      const answer = (await rl.question('    automate this? [y/N] ')).trim().toLowerCase();
+      (answer === 'y' || answer === 'yes' ? accept : reject).push(e.title);
+    }
+  } finally {
+    rl.close();
+  }
+  const result = applyWorkflowDecisions(accept, reject);
+  if (result.accepted.length > 0) {
+    console.log(`\nSaved ${result.accepted.length} automation(s) — the observer will offer to run them when you start those workflows.`);
+  } else {
+    console.log('\nNo proposals accepted.');
+  }
+}
+
 function help(): void {
   console.log(`Context Autopilot — automated context collection for coding agents
 https://thecontextlayer.ai
@@ -372,6 +621,19 @@ Commands:
              (--hook: print a nudge only past --threshold; silent otherwise)
   stale      Find context-file references the repo has outgrown (exit 1 if any)
   export     Export distilled entries as Agent Operating Procedure JSON
+
+Ambient (macOS — screen observation, 100% local):
+  observe    Watch your screen at intentional moments; opens the dashboard
+             --demo       replay a synthetic day through the real pipeline (no permissions)
+             --install    run in the background at login + nightly pattern mining
+             --uninstall  remove the background agents
+             --status     what's on, what's running, what's captured
+             --pause <m>  pause capture for m minutes
+  on / off   Master switch for ambient observation (off = instant, persistent)
+  dashboard  Open the local dashboard (timeline, patterns, automations, controls)
+  journal    Alias for dashboard
+  aop        Review workflow proposals in the terminal; list automations
+  scan/distill --source screen   mine observed days for repeated workflows
 
 Options:
   -p, --project <path>   Project to analyze (default: current directory)
@@ -405,6 +667,17 @@ async function main(): Promise<void> {
       return cmdStale(flags);
     case 'export':
       return cmdExport(flags);
+    case 'observe':
+      return cmdObserve(flags);
+    case 'on':
+      return cmdOnOff(true);
+    case 'off':
+      return cmdOnOff(false);
+    case 'dashboard':
+    case 'journal':
+      return cmdDashboard();
+    case 'aop':
+      return cmdAop(flags);
     default:
       return help();
   }

@@ -19,9 +19,18 @@ import {
   saveProposals,
 } from './propose.js';
 import { recordDistilledSignals } from './state.js';
+import { readAllDays } from './ambient/records.js';
+import {
+  applyWorkflowDecisions,
+  buildEpisodes,
+  distillWorkflows,
+  findWorkflowCandidates,
+  loadAops,
+  saveWorkflowProposals,
+} from './ambient/workflows.js';
 import type { ProposalFile } from './types.js';
 
-const SERVER = { name: 'context-autopilot', version: '0.5.0' };
+const SERVER = { name: 'context-autopilot', version: '0.6.0' };
 const PROTOCOL_VERSION = '2025-06-18';
 
 /** Loaded into the agent's context at session start via initialize.instructions. */
@@ -112,6 +121,40 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'scan_ambient_activity',
+    description:
+      "Summarize what the ambient screen observer has captured (macOS, 100% local): observed days, captured moments, and workflow candidates — app/window sequences that recur across multiple days. Model-free and fast. If the user hasn't enabled ambient observation, suggest `ctxlayer observe`.",
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'distill_workflow_proposals',
+    description:
+      'Mine the ambient screen observations for workflows that recur across days and distill them into Agent Operating Procedure proposals (trigger + step-by-step procedure + evidence). Proposals are saved for review; NOTHING is automated until the user approves via approve_aop. Can take a minute.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'approve_aop',
+    description:
+      "Apply the user's explicit decisions on pending workflow (AOP) proposals. Call ONLY after the user has said in conversation which workflows to automate — never decide for them. Accepted workflows become Agent Operating Procedures the live observer offers to run; rejected ones are remembered and never re-proposed.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        accept_titles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Titles of workflow proposals the user accepted (may be empty).',
+        },
+        reject_titles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Titles of workflow proposals the user rejected.',
+        },
+      },
+      required: ['accept_titles'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'distill_context_proposals',
     description:
       'Run the full Context Autopilot pipeline: scan session history, then distill the signals into evidence-backed CLAUDE.md/AGENTS.md proposals. Proposals are saved for review; NOTHING is written to context files until the user approves via apply_context_proposals. Can take a minute. Good moments to proactively suggest this: after the user corrects you repeatedly, or at the natural end of a substantial working session — ask first, then run.',
@@ -186,6 +229,72 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       `Rejected: ${result.rejected.length ? result.rejected.join(', ') : 'none'}.`,
       result.unmatched.length ? `WARNING — no pending proposal matched: ${result.unmatched.join(', ')}.` : '',
       written ? `Files: ${written}.` : 'No files written.',
+      `${result.stillPending} proposal(s) still pending.`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (name === 'scan_ambient_activity') {
+    const byDay = readAllDays();
+    const episodesByDay = new Map<string, ReturnType<typeof buildEpisodes>>();
+    for (const [day, records] of byDay) episodesByDay.set(day, buildEpisodes(day, records));
+    const candidates = findWorkflowCandidates(episodesByDay);
+    return JSON.stringify(
+      {
+        observedDays: byDay.size,
+        capturedMoments: [...byDay.values()].reduce((n, r) => n + r.length, 0),
+        automations: loadAops().map((a) => ({ title: a.title, enabled: a.enabled })),
+        workflowCandidates: candidates.map((c) => ({
+          recurredOnDays: c.days,
+          steps: c.episodes[0].steps.map((s) => `[${s.app}] ${s.title}`),
+        })),
+      },
+      null,
+      2,
+    );
+  }
+  if (name === 'distill_workflow_proposals') {
+    const episodesByDay = new Map<string, ReturnType<typeof buildEpisodes>>();
+    for (const [day, records] of readAllDays()) episodesByDay.set(day, buildEpisodes(day, records));
+    const candidates = findWorkflowCandidates(episodesByDay);
+    if (candidates.length === 0) {
+      return 'No repeated workflows found yet — patterns emerge once the ambient observer has seen the same sequence on 2+ days.';
+    }
+    const proposals = await distillWorkflows(candidates);
+    if (proposals.length === 0) return 'The distiller found no coherent, automatable workflows to propose.';
+    saveWorkflowProposals(proposals);
+    const report = proposals
+      .map((p, i) => {
+        const e = p.entry;
+        const steps = (e.procedure ?? []).map((s) => `   · ${s}`).join('\n');
+        const evidence = e.evidence.slice(0, 3).map((ev) => `> ${ev.quote}`).join('\n');
+        return `**${i + 1}. ${e.title}** _(${e.confidence} confidence)_\n${e.rule}\n${steps}\n${evidence}`;
+      })
+      .join('\n\n');
+    const picker = proposals
+      .map((p, i) => {
+        const ev = p.entry.evidence[0];
+        return `${i + 1}. label: "${p.entry.title}" — description: "${p.entry.confidence}${ev ? ` · seen: ${ev.quote.slice(0, 80)}` : ''}"`;
+      })
+      .join('\n');
+    return distillResultText(
+      `## Workflows Autopilot noticed you doing by hand — automate any of these?\n\n${report}\n\nNothing is automated until you decide. Reply with your choices (e.g. "automate 1, skip 2").`,
+      picker,
+      'call approve_aop with their exact accept/reject titles.',
+    );
+  }
+  if (name === 'approve_aop') {
+    const result = applyWorkflowDecisions(
+      (args.accept_titles as string[]) ?? [],
+      (args.reject_titles as string[]) ?? [],
+    );
+    return [
+      `Automated: ${result.accepted.length ? result.accepted.join(', ') : 'none'}.`,
+      `Rejected: ${result.rejected.length ? result.rejected.join(', ') : 'none'}.`,
+      result.unmatched.length ? `WARNING — no pending proposal matched: ${result.unmatched.join(', ')}.` : '',
+      result.accepted.length
+        ? 'The live observer will now offer to run these when the user starts the workflow.'
+        : '',
       `${result.stillPending} proposal(s) still pending.`,
     ]
       .filter(Boolean)

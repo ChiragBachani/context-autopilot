@@ -13,7 +13,9 @@ export type ObservationKind =
   /** The human corrected or pushed back on something the agent did. */
   | 'correction'
   /** The human blocked a proposed action (e.g. rejected a tool call). */
-  | 'rejection';
+  | 'rejection'
+  /** Ambient observation of the human working (screen capture, browser…). */
+  | 'activity';
 
 export interface Observation {
   id: string;
@@ -76,6 +78,22 @@ export interface AopEntry {
   rationale: string;
   confidence: 'high' | 'medium' | 'low';
   evidence: AopEvidence[];
+  /** For workflow AOPs: when the live observer should offer to take over. */
+  trigger?: AopTrigger;
+  /** For workflow AOPs: the steps an agent follows to perform the work. */
+  procedure?: string[];
+}
+
+/**
+ * Live-trigger signature for a workflow AOP: the observer matches the
+ * frontmost app (and optionally a window-title fragment) against this to
+ * detect that the user is *starting* the workflow.
+ */
+export interface AopTrigger {
+  /** App name fragment, case-insensitive (e.g. "Chrome", "Mail"). */
+  app: string;
+  /** Window-title fragment, case-insensitive (e.g. "Inbox"). */
+  titlePattern?: string;
 }
 
 export interface AopEvidence {
