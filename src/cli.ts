@@ -29,6 +29,7 @@ import {
   uninstallLaunchAgents,
 } from './ambient/observer.js';
 import { dayKey, readAllDays, readDay } from './ambient/records.js';
+import { launchMenuBar, menubarBinary } from './ambient/menubar.js';
 import { narrateDay, renderSummaryText, summarizeDayFromDisk } from './ambient/summarize.js';
 import {
   applyWorkflowDecisions,
@@ -523,10 +524,23 @@ async function cmdObserve(flags: Flags): Promise<void> {
   if (!started) process.exit(1);
   const server = await startDashboard();
   const port = loadConfig().dashboardPort;
+  // Bring up the menu bar app so observation state is glanceable in the top bar
+  // (idempotent — the app's pid lock makes a duplicate launch a no-op).
+  launchMenuBar();
   if (server && !flags.agent) {
     openInBrowser(`http://localhost:${port}`);
     console.log(`dashboard open at http://localhost:${port} — leave this running; Ctrl-C stops observing.`);
+    console.log('menu bar icon added — click it to toggle recording or open the dashboard.');
   }
+}
+
+async function cmdMenubar(): Promise<void> {
+  if (menubarBinary() === null) {
+    fail('Could not build the menu bar app (needs the swiftc that ships with Xcode Command Line Tools).');
+  }
+  launchMenuBar();
+  console.log('Context Autopilot menu bar app is running — look for the eye icon in your top bar.');
+  console.log('Green = observing · yellow = paused · gray = off. Click it to toggle or open the dashboard.');
 }
 
 async function cmdObserveStatus(): Promise<void> {
@@ -740,6 +754,7 @@ Ambient (macOS — screen observation, 100% local):
   journal    Alias for dashboard
   aop        Review workflow proposals in the terminal; list automations
   summary    Today's work at a glance (time per app, focus, cadence); --narrate for a recap
+  menubar    Add the menu bar icon (toggle recording / open dashboard from the top bar)
   scan/distill --source screen   mine observed days for repeated workflows
 
 Options:
@@ -789,6 +804,9 @@ async function main(): Promise<void> {
       return cmdAop(flags);
     case 'summary':
       return cmdSummary(flags);
+    case 'menubar':
+    case 'tray':
+      return cmdMenubar();
     default:
       return help();
   }

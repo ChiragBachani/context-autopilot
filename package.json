@@ -30,7 +30,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc && cp src/ambient/helper.swift dist/ambient/helper.swift",
+    "build": "tsc && cp src/ambient/*.swift dist/ambient/",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
     "start": "node dist/cli.js",

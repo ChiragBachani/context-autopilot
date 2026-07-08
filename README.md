@@ -124,17 +124,19 @@ Coding transcripts are chapter one. `ctxlayer observe` is chapter two: it watche
 $ ctxlayer observe --demo    # see the whole pipeline on synthetic data, zero permissions
 $ ctxlayer observe           # the real thing (walks you through the two macOS permission toggles)
 $ ctxlayer observe --install # background at login (mining runs on its own as you work)
+$ ctxlayer summary           # today at a glance: time per app, focus, cadence (--narrate for a recap)
+$ ctxlayer menubar           # add a top-bar icon to toggle recording / open the dashboard
 ```
 
 How it works:
 
-1. **Observe** — captures the screen at *intentional moments* only: the end of a burst of activity, dwelling on one window, switching context after real work. Never on a timer, never during video calls or anything blocklisted, and input activity is measured only as idle-time — no keylogging, ever. When the front app is a browser, it also reads the **active tab's URL** so web work is observed as precise domains, not fuzzy window titles (private/incognito tabs are never read, and a URL that trips the blocklist is skipped before any capture).
-2. **Parse** — every capture is OCR'd **on-device** with Apple Vision. Screenshots never leave your Mac; they auto-delete after 14 days (or instantly, in text-only mode).
+1. **Observe** — two streams. Screenshots at *intentional moments* only (end of a burst, dwelling on a window, a real context switch — never a timer, never during video calls or anything blocklisted). And a **dense activity log**: every tick records the foreground app/window/URL, whether you're active, and key/click **counts** — cadence only, never the keys themselves (the OS exposes just an integer tally) — folded into continuous work segments. Blocklisted apps and private/incognito tabs are never recorded in either stream.
+2. **Parse** — every screenshot is OCR'd **on-device** with Apple Vision. Screenshots never leave your Mac; they auto-delete after 14 days (or instantly, in text-only mode). The activity log powers an instant **day summary** (time per app, top sites, focus, cadence) with an optional plain-English recap — so you can see it working before any workflow has recurred.
 3. **Mine** — sequences of app/window steps that recur become workflow candidates: across days, or even twice within the same day, so results show up on day one. Mining runs automatically every couple of hours — at moments you've stepped away, never mid-flow — with a nightly sweep as backstop. Web steps cluster by host + path (e.g. `docs.google.com/spreadsheets`), so a workflow keeps matching across days even as titles, counts, and doc ids change.
 4. **Surface** — candidates are distilled (via your own `claude` CLI) into Agent Operating Procedures — trigger, step-by-step procedure, evidence — and wait for your approval on the local dashboard at `http://localhost:4780`.
 5. **Automate** — approve one, and the next time you *start* that workflow, a notification offers to take over: one click opens a Claude Code session preloaded with the procedure. For web workflows the trigger is the URL itself (e.g. "you just opened `mail.google.com`"), so the offer is precise; the procedure carries the exact address the agent should start at.
 
-The dashboard (100% local, served from the observer itself) shows a live timeline of what was observed, patterns awaiting review, your automations, and the controls: a master **OFF** switch (instant, persistent), pause, blocklists, and delete-everything. `ctxlayer off` does the same from the terminal.
+The dashboard (100% local, served from the observer itself) shows your day summary, a live timeline, patterns awaiting review (with a **Mine now** button to distill on demand), your automations, and the controls: a master **OFF** switch (instant, persistent), pause, blocklists, and delete-everything. A **menu bar icon** mirrors all of this in the top bar — green eye when observing, slashed when off, yellow when paused — and its menu toggles recording or opens the dashboard without a terminal. `ctxlayer off` does the same from the terminal.
 
 ## FAQ
 
