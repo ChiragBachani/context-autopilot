@@ -6,6 +6,18 @@ Everything is local. Nothing was published to npm, nothing was merged to `main`,
 
 ---
 
+## Update — browser adapter added (and verified on your live Chrome)
+
+Since the first build, one more layer landed on the `ambient` branch: **the browser adapter.** When the front app is a browser, the observer now reads the **active tab's real URL** alongside the screenshot. Why it matters:
+
+- Web work is observed as precise addresses (`docs.google.com/spreadsheets`) instead of drifting window titles — so a repeated web workflow keeps matching across days even as counts, subjects, and doc ids change.
+- The live take-over offer for a web workflow triggers on the **URL** ("you just opened `mail.google.com`"), not a fuzzy title — much more precise.
+- The approved procedure carries the exact URL the agent should start at.
+
+Privacy held to the same bar: **private/incognito tabs are never read**, and a URL that hits your blocklist (bank, login, …) is skipped *before* any capture. Verified live this morning — it read the active tab off your running Chrome correctly, and the full suite is now **56 tests, all green**.
+
+---
+
 ## See it work right now (no permissions, 10 seconds)
 
 ```bash
@@ -64,19 +76,19 @@ Last night I checked: **Accessibility is already granted** to your terminal, but
 ## Honest limitations (so nothing surprises you)
 
 - **macOS only** for now (uses `screencapture`, Apple Vision, `osascript`).
-- **"Run it" scope:** workflows an agent can do with files/code/terminal run fully. Browser-heavy workflows (like the Gmail→Sheets demo) need your Chrome extension connected for the agent to actually click around — the procedure is correct either way, but v1 hands you a preloaded Claude session rather than fully driving Chrome unattended. Full hands-off browser automation is the next step.
-- The live "offer to take over" fires on an app+window-title match; it's intentionally conservative (throttled, with a "don't ask again").
+- **"Run it" scope:** workflows an agent can do with files/code/terminal run fully. Browser-heavy workflows are now *observed* precisely (real URLs), but to *execute* them the agent still needs your Chrome extension connected to click around — the procedure and start URL are correct either way; v1 hands you a preloaded Claude session rather than fully driving Chrome unattended. Full hands-off browser execution is the next step.
+- The live "offer to take over" fires on an app match plus a title *or URL* pattern; it's intentionally conservative (throttled, with a "don't ask again").
 
 ---
 
 ## For the record: what's on the branch
 
-- New code under `src/ambient/` (observer, config, records, workflows, dashboard, demo, native Swift helper) + `src/sources/screen.ts`
-- 29 new tests; **all 48 tests pass** (the original 19 untouched)
+- New code under `src/ambient/` (observer, config, records, workflows, dashboard, demo, native Swift helper, **browser**) + `src/sources/screen.ts`
+- **All 56 tests pass** (the original 19 untouched; 29 added for ambient, 8 for the browser adapter)
 - README section + this file
 - Version bumped to 0.6.0
 - A **draft PR** is open on GitHub for you to review at your own pace. Nothing merges until you say so.
 
 ## If you want to keep going
 - Review the PR, then `git checkout main` whenever you want to drop back.
-- The natural next build: the browser adapter, so "Run it" can fully drive web workflows unattended.
+- The natural next build: **browser execution** — wire the approved web AOPs to actually drive Chrome via the claude.ai extension, so "Run it" completes a web workflow unattended (observation of those workflows is already done).

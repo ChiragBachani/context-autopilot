@@ -94,6 +94,9 @@ export interface AopTrigger {
   app: string;
   /** Window-title fragment, case-insensitive (e.g. "Inbox"). */
   titlePattern?: string;
+  /** URL fragment, case-insensitive (e.g. "mail.google.com"). For web
+   * workflows this is far more precise than a window title. */
+  urlPattern?: string;
 }
 
 export interface AopEvidence {

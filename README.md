@@ -117,11 +117,11 @@ $ ctxlayer observe --install # background at login + nightly pattern mining
 
 How it works:
 
-1. **Observe** — captures the screen at *intentional moments* only: the end of a burst of activity, dwelling on one window, switching context after real work. Never on a timer, never during video calls or anything blocklisted, and input activity is measured only as idle-time — no keylogging, ever.
+1. **Observe** — captures the screen at *intentional moments* only: the end of a burst of activity, dwelling on one window, switching context after real work. Never on a timer, never during video calls or anything blocklisted, and input activity is measured only as idle-time — no keylogging, ever. When the front app is a browser, it also reads the **active tab's URL** so web work is observed as precise domains, not fuzzy window titles (private/incognito tabs are never read, and a URL that trips the blocklist is skipped before any capture).
 2. **Parse** — every capture is OCR'd **on-device** with Apple Vision. Screenshots never leave your Mac; they auto-delete after 14 days (or instantly, in text-only mode).
-3. **Mine** — sequences of app/window steps that recur across days become workflow candidates.
+3. **Mine** — sequences of app/window steps that recur across days become workflow candidates. Web steps cluster by host + path (e.g. `docs.google.com/spreadsheets`), so a workflow keeps matching across days even as titles, counts, and doc ids change.
 4. **Surface** — candidates are distilled (via your own `claude` CLI) into Agent Operating Procedures — trigger, step-by-step procedure, evidence — and wait for your approval on the local dashboard at `http://localhost:4780`.
-5. **Automate** — approve one, and the next time you *start* that workflow, a notification offers to take over: one click opens a Claude Code session preloaded with the procedure.
+5. **Automate** — approve one, and the next time you *start* that workflow, a notification offers to take over: one click opens a Claude Code session preloaded with the procedure. For web workflows the trigger is the URL itself (e.g. "you just opened `mail.google.com`"), so the offer is precise; the procedure carries the exact address the agent should start at.
 
 The dashboard (100% local, served from the observer itself) shows a live timeline of what was observed, patterns awaiting review, your automations, and the controls: a master **OFF** switch (instant, persistent), pause, blocklists, and delete-everything. `ctxlayer off` does the same from the terminal.
 
@@ -140,7 +140,7 @@ Auto-memory captures what the model notices *live, in the moment*, in one harnes
 
 ## Privacy
 
-Everything runs on your machine. Transcripts are parsed locally; only the extracted signals (short quotes of your own instructions) are sent to the model you already use for coding. Nothing is uploaded anywhere else, ever.
+Everything runs on your machine. Transcripts are parsed locally; only the extracted signals (short quotes of your own instructions) are sent to the model you already use for coding. Nothing is uploaded anywhere else, ever. Ambient observation holds the same line: screenshots are OCR'd on-device and never leave your Mac, active-tab URLs are read locally (private/incognito tabs never, blocklisted pages never), and only the distilled workflow candidates — not your screens — are sent to your own `claude` CLI.
 
 ## Roadmap
 

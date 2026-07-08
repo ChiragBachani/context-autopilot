@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path';
 import { runModel } from '../distill.js';
 import type { AopEntry, AopTrigger, Proposal, ProposalFile } from '../types.js';
+import { browserStepKey } from './browser.js';
 import { ambientRoot, aopsRoot } from './config.js';
 import type { ActivityRecord } from './records.js';
 
@@ -30,6 +31,8 @@ export interface WorkflowStep {
   titleKey: string;
   /** Representative window title (untruncated, for display). */
   title: string;
+  /** Active-tab URL, when the step was in a browser. */
+  url?: string;
   /** Short OCR digest for the distiller. */
   textDigest?: string;
   timestamp: string;
@@ -76,10 +79,14 @@ export function buildEpisodes(day: string, records: ActivityRecord[]): Episode[]
       flush(new Date(lastTs).toISOString());
     }
     if (current.length === 0) start = record.timestamp;
+    // For browser steps, cluster by host + first path segment (stable across
+    // days) instead of the window title (which drifts with counts and subjects).
+    const webKey = record.url ? browserStepKey(record.url) : '';
     const step: WorkflowStep = {
       app: record.app,
-      titleKey: titleKey(record.windowTitle),
+      titleKey: webKey || titleKey(record.windowTitle),
       title: record.windowTitle,
+      url: record.url,
       textDigest: record.text?.replace(/\s+/g, ' ').slice(0, MAX_TEXT_PER_STEP),
       timestamp: record.timestamp,
     };
@@ -173,7 +180,8 @@ function buildWorkflowPrompt(candidates: WorkflowCandidate[]): string {
           const steps = episode.steps
             .map((s, n) => {
               const digest = s.textDigest ? ` — screen text: "${s.textDigest}"` : '';
-              return `    ${n + 1}. [${s.app}] "${s.title}"${digest}`;
+              const where = s.url ? ` <${s.url}>` : '';
+              return `    ${n + 1}. [${s.app}]${where} "${s.title}"${digest}`;
             })
             .join('\n');
           return `  Episode on ${episode.day} (${episode.start.slice(11, 16)}–${episode.end.slice(11, 16)}):\n${steps}`;
@@ -190,8 +198,8 @@ Your job: for each candidate that is genuinely a coherent, repeated workflow (no
 Rules:
 - "title": short human name for the workflow (e.g. "Weekly metrics report").
 - "rule": one sentence describing when/what (imperative).
-- "procedure": 3-8 imperative steps AN AI AGENT would follow to do this work (not a description of what the human did — instructions for doing it). Be concrete: name the apps, files, and actions visible in the evidence.
-- "trigger": {"app": <app name exactly as it appears in the steps>, "titlePattern": <short distinctive window-title fragment>} — the moment the workflow STARTS, so a live observer can offer to take over when the person begins it.
+- "procedure": 3-8 imperative steps AN AI AGENT would follow to do this work (not a description of what the human did — instructions for doing it). Be concrete: name the apps, files, URLs (use the <…> addresses shown), and actions visible in the evidence.
+- "trigger": {"app": <app name exactly as it appears in the steps>, "titlePattern": <short distinctive window-title fragment>, "urlPattern": <host or host/path of the FIRST step, if it is a web page — e.g. "mail.google.com">} — the moment the workflow STARTS, so a live observer can offer to take over when the person begins it. Prefer urlPattern for web workflows; it is far more precise than a title.
 - "confidence": "high" if the same sequence appears on 3+ days, "medium" for 2 days, "low" if the pattern is fuzzy.
 - "rationale": one sentence on why this looks automatable.
 - "evidence": one entry per episode: {"quote": "<day HH:MM–HH:MM: app → app → app>", "timestamp": <episode start ISO>, "sessionId": <day>}.
@@ -233,6 +241,7 @@ export function parseWorkflowEntries(raw: string): AopEntry[] {
           ? {
               app: trigger.app,
               titlePattern: typeof trigger.titlePattern === 'string' ? trigger.titlePattern : undefined,
+              urlPattern: typeof trigger.urlPattern === 'string' ? trigger.urlPattern : undefined,
             }
           : undefined,
       evidence: Array.isArray(e.evidence)
@@ -406,15 +415,17 @@ export function setAopEnabled(slug: string, enabled: boolean): StoredAop | undef
 /** The prompt an agent receives when the user says "Run it". */
 export function renderAopMarkdown(aop: StoredAop): string {
   const steps = aop.procedure.map((s, i) => `${i + 1}. ${s}`).join('\n');
+  const startAt = aop.trigger?.urlPattern ? `\nStart at: https://${aop.trigger.urlPattern.replace(/^https?:\/\//, '')}\n` : '';
   return `# Agent Operating Procedure: ${aop.title}
 
 ${aop.rule}
-
+${startAt}
 You are performing this workflow on behalf of the user — it was learned from
 ambient observation of how they do it themselves, and they explicitly asked
 you to take over. Follow the steps; ask before anything irreversible
 (sending email, deleting data). If a step needs browser access you don't
-have, say so and tell the user what to connect.
+have, say so and tell the user what to connect (the Chrome extension for
+claude.ai lets you drive their browser).
 
 ## Procedure
 

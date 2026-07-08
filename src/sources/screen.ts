@@ -31,13 +31,14 @@ export class ScreenAdapter implements SourceAdapter {
     for (const day of listDays()) {
       for (const record of readDay(day)) {
         const digest = record.text ? ` — ${record.text.replace(/\s+/g, ' ').slice(0, 160)}` : '';
+        const where = record.url ? ` <${record.url}>` : '';
         observations.push({
           id: record.id,
           source: this.name,
           kind: 'activity',
           timestamp: record.timestamp,
           sessionId: day,
-          text: `[${record.app}] ${record.windowTitle}${digest}`,
+          text: `[${record.app}]${where} ${record.windowTitle}${digest}`,
         });
       }
     }

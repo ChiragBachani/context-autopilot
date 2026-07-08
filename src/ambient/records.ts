@@ -23,6 +23,8 @@ export interface ActivityRecord {
   screenshot?: string;
   /** On-device OCR extract, clipped. Absent when OCR was unavailable. */
   text?: string;
+  /** Active-tab URL when the app was a browser (never set for private tabs). */
+  url?: string;
 }
 
 export function dayKey(date: Date = new Date()): string {

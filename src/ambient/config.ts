@@ -115,14 +115,19 @@ export function pauseFor(minutes: number): AmbientConfig {
 
 export type CaptureVerdict =
   | { allowed: true }
-  | { allowed: false; reason: 'disabled' | 'paused' | 'blocklisted-app' | 'blocklisted-title' };
+  | { allowed: false; reason: 'disabled' | 'paused' | 'blocklisted-app' | 'blocklisted-title' | 'blocklisted-url' };
 
-/** The gate every capture goes through. Pure, so tests can hammer it. */
+/**
+ * The gate every capture goes through. Pure, so tests can hammer it. When a
+ * browser URL is known, the same title-keyword blocklist is applied to it, so
+ * a sensitive page (bank, login…) is blocked even if its window title is bland.
+ */
 export function captureVerdict(
   config: AmbientConfig,
   app: string,
   title: string,
   now: Date = new Date(),
+  url?: string,
 ): CaptureVerdict {
   if (!config.enabled) return { allowed: false, reason: 'disabled' };
   if (config.pausedUntil && now.toISOString() < config.pausedUntil) {
@@ -135,6 +140,12 @@ export function captureVerdict(
   const titleLower = title.toLowerCase();
   for (const keyword of config.blocklistTitleKeywords) {
     if (titleLower.includes(keyword.toLowerCase())) return { allowed: false, reason: 'blocklisted-title' };
+  }
+  if (url) {
+    const urlLower = url.toLowerCase();
+    for (const keyword of config.blocklistTitleKeywords) {
+      if (urlLower.includes(keyword.toLowerCase())) return { allowed: false, reason: 'blocklisted-url' };
+    }
   }
   return { allowed: true };
 }
