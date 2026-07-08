@@ -240,6 +240,7 @@ const PAGE = `<!doctype html>
   .chip.burst-end{background:rgba(0,200,160,.14);color:var(--accent)}
   .chip.dwell{background:rgba(91,138,255,.16);color:var(--accent2)}
   .chip.context-switch{background:rgba(245,166,35,.15);color:var(--warn)}
+  .chip.new-page{background:rgba(186,120,255,.16);color:#ba78ff}
   .chip.demo{background:rgba(139,151,173,.18);color:var(--muted)}
   .thumb{width:104px;height:66px;object-fit:cover;object-position:top;border-radius:7px;border:1px solid var(--border);cursor:pointer;flex-shrink:0;margin-left:auto}
   .prop h3{font-size:15.5px;margin-bottom:2px}

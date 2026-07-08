@@ -85,13 +85,37 @@ test('a burst of activity followed by idle triggers a capture', () => {
   // 4 active ticks (8s of work), then the user stops.
   for (let i = 0; i < 4; i++) {
     decisions = engine.tick({ now: T0 + i * 2000, app: 'VS Code', title: 'main.ts', idleSeconds: 0.4 });
-    assert.equal(decisions.length, 0);
+    // At the 6s mark the settled new document is photographed once (new-page).
+    assert.deepEqual(decisions, i === 3 ? [{ kind: 'new-page' }] : []);
   }
   decisions = engine.tick({ now: T0 + 8000, app: 'VS Code', title: 'main.ts', idleSeconds: 6 });
   assert.deepEqual(decisions, [{ kind: 'burst-end' }]);
   // Staying idle does not re-fire.
   decisions = engine.tick({ now: T0 + 10_000, app: 'VS Code', title: 'main.ts', idleSeconds: 8 });
   assert.equal(decisions.length, 0);
+});
+
+test('a short page visit (too brief for dwell) still gets one new-page capture', () => {
+  const engine = new TriggerEngine();
+  // 10 seconds reading a page — dwell (45s) would never fire.
+  let fired: string[] = [];
+  for (let t = 0; t <= 10_000; t += 2000) {
+    fired = fired.concat(engine.tick({ now: T0 + t, app: 'Chrome', title: 'Some article', idleSeconds: 1 }).map((d) => d.kind));
+  }
+  assert.deepEqual(fired, ['new-page'], 'exactly one capture for the settled page');
+
+  // Move on, then revisit the same page — throttled, no second new-page.
+  engine.tick({ now: T0 + 12_000, app: 'Slack', title: '#general', idleSeconds: 1 });
+  let refires = 0;
+  for (let t = 14_000; t <= 24_000; t += 2000) {
+    refires += engine.tick({ now: T0 + t, app: 'Chrome', title: 'Some article', idleSeconds: 1 }).filter((d) => d.kind === 'new-page').length;
+  }
+  assert.equal(refires, 0, 'same page within the throttle window is not re-captured');
+
+  // A different page fires its own new-page.
+  engine.tick({ now: T0 + 26_000, app: 'Chrome', title: 'Another article', idleSeconds: 1 });
+  const other = engine.tick({ now: T0 + 32_500, app: 'Chrome', title: 'Another article', idleSeconds: 1 });
+  assert.ok(other.some((d) => d.kind === 'new-page'), 'a genuinely new page is captured');
 });
 
 test('brief taps without a real burst never trigger', () => {

@@ -8,7 +8,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSyn
 import { join } from 'node:path';
 import { ambientRoot } from './config.js';
 
-export type CaptureTrigger = 'burst-end' | 'dwell' | 'context-switch' | 'demo';
+export type CaptureTrigger = 'burst-end' | 'dwell' | 'context-switch' | 'new-page' | 'demo';
 
 export interface ActivityRecord {
   id: string;
