@@ -8,6 +8,7 @@ import type { ToolAccess } from '../dist/sources/claude-code.js';
 import {
   aggregateAccesses,
   applyCodemap,
+  hasMapBlock,
   parseCodemap,
   renderCodemapBlock,
 } from '../dist/codemap.js';
@@ -109,6 +110,15 @@ test('applyCodemap is idempotent and never touches hand-written content', async 
   assert.ok(content.includes('v2 role'));
   assert.ok(!content.includes('v1 role'));
   assert.ok(content.includes('Hand-written note that must survive.'));
+});
+
+test('hasMapBlock detects the map marker only once written', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ctxlayer-hasmap-'));
+  assert.equal(hasMapBlock(dir), false, 'no context files → no map');
+  await writeFile(join(dir, 'CLAUDE.md'), '# Project context\n\nnotes\n', 'utf8');
+  assert.equal(hasMapBlock(dir), false, 'context file without a map block');
+  await applyCodemap(dir, 'CLAUDE.md', { files: [{ path: 'a.ts', role: 'r' }], notes: [] });
+  assert.equal(hasMapBlock(dir), true, 'after writing a map block');
 });
 
 test('applyCodemap creates a context file when none exists', async () => {

@@ -97,7 +97,7 @@ It's evidence-based like everything else: roles are grounded in each file's real
 /plugin install context-autopilot@the-context-layer
 ```
 
-Then ask Claude to "update project context from my session history" — or don't ask at all: the plugin ships a **SessionStart hook** that runs `ctxlayer check` (fast, no model call) when a session begins. If enough new signals have accumulated since the last distillation, Claude gets a nudge to offer distillation at a natural pause. No new signals → complete silence.
+Then ask Claude to "update project context from my session history" — or don't ask at all: the plugin ships a **SessionStart hook** that runs `ctxlayer check` (fast, no model call) when a session begins. If enough new signals have accumulated since the last distillation, Claude gets a nudge to offer distillation at a natural pause — and if the repo has substantial agent navigation but no codebase map yet, it's nudged to offer `ctxlayer map` too. Nothing to surface → complete silence.
 
 ### MCP server
 

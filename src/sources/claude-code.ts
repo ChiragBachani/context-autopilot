@@ -265,10 +265,16 @@ function cleanSearchTerm(pattern: unknown): string | undefined {
 export async function readToolAccesses(
   projectPath: string,
   root: string = projectsRoot(),
+  opts: { ownSessionsOnly?: boolean } = {},
 ): Promise<ToolAccess[]> {
   const wanted = resolve(projectPath);
   const adapter = new ClaudeCodeAdapter(root);
-  const projects = await adapter.discover();
+  let projects = await adapter.discover();
+  // Fast path (e.g. the session-start nudge): only this project's own
+  // sessions, skipping the cross-project transcript scan.
+  if (opts.ownSessionsOnly) {
+    projects = projects.filter((p) => p.path && resolve(p.path) === wanted);
+  }
   const accesses: ToolAccess[] = [];
   const seen = new Set<string>();
 

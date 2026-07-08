@@ -12,7 +12,7 @@
  * The aggregation and rendering here are source-agnostic.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runModel } from './distill.js';
@@ -265,6 +265,42 @@ export async function generateCodemap(
   const snippets = await readHeaderSnippets(projectPath, signals.files.map((f) => f.path));
   const result = await distillCodemap(signals, { snippets, model: opts.model, runModel: opts.runModel });
   return { signals, result };
+}
+
+/** Does a context file already carry a codebase-map block? */
+export function hasMapBlock(projectPath: string): boolean {
+  for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+    const p = join(projectPath, name);
+    if (!existsSync(p)) continue;
+    try {
+      if (readFileSync(p, 'utf8').includes(BEGIN)) return true;
+    } catch {
+      // unreadable — treat as absent
+    }
+  }
+  return false;
+}
+
+/**
+ * Worth mapping = the agent has worked this repo across several sessions and
+ * navigated a real spread of files. (Work spreads across files rather than
+ * revisiting the same one, so total distinct files is a better signal than
+ * per-file session counts.)
+ */
+const MAP_NUDGE_MIN_SESSIONS = 3;
+const MAP_NUDGE_MIN_FILES = 8;
+
+/**
+ * Model-free check for the session-start nudge: is there enough agent
+ * navigation in this project to be worth mapping, and no map yet? Reads only
+ * this project's own sessions so it stays fast enough for a hook.
+ */
+export async function shouldSuggestMap(projectPath: string): Promise<{ suggest: boolean; files: number }> {
+  if (hasMapBlock(projectPath)) return { suggest: false, files: 0 };
+  const signals = aggregateAccesses(await readToolAccesses(projectPath, undefined, { ownSessionsOnly: true }));
+  const suggest =
+    signals.sessionsAnalyzed >= MAP_NUDGE_MIN_SESSIONS && signals.files.length >= MAP_NUDGE_MIN_FILES;
+  return { suggest, files: signals.files.length };
 }
 
 function codemapCachePath(projectPath: string): string {

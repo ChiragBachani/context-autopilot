@@ -13,7 +13,7 @@
 import { createInterface } from 'node:readline/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { readFile, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { discoverAll, observeEverything, observeProject, type SourceName } from './engine.js';
@@ -41,7 +41,7 @@ import {
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
 import { readToolAccesses } from './sources/claude-code.js';
-import { aggregateAccesses, applyCodemap, distillCodemap, renderCodemapBlock } from './codemap.js';
+import { aggregateAccesses, applyCodemap, generateCodemap, renderCodemapBlock, shouldSuggestMap } from './codemap.js';
 import { findStaleReferences } from './stale.js';
 import {
   applyToFile,
@@ -356,14 +356,28 @@ async function cmdCheck(flags: Flags): Promise<void> {
     return;
   }
   if (flags.hook) {
-    if (fresh.length < flags.threshold) return; // silence = no nudge
-    const top = fresh
-      .slice(0, 3)
-      .map((s) => `"${s.summary.replace(/\s+/g, ' ').slice(0, 100)}"`)
-      .join('; ');
-    console.log(
-      `Context Autopilot: ${fresh.length} new durable context signal(s) have accumulated in this project's session history since the last distillation (e.g. ${top}). When there is a natural pause, offer to run \`ctxlayer distill\` and review the proposals with the user — do not run it mid-task or apply anything without their approval.`,
-    );
+    const nudges: string[] = [];
+    if (fresh.length >= flags.threshold) {
+      const top = fresh
+        .slice(0, 3)
+        .map((s) => `"${s.summary.replace(/\s+/g, ' ').slice(0, 100)}"`)
+        .join('; ');
+      nudges.push(
+        `Context Autopilot: ${fresh.length} new durable context signal(s) have accumulated in this project's session history since the last distillation (e.g. ${top}). When there is a natural pause, offer to run \`ctxlayer distill\` and review the proposals with the user — do not run it mid-task or apply anything without their approval.`,
+      );
+    }
+    // Proactive map nudge: lots of agent navigation here but no map yet.
+    try {
+      const map = await shouldSuggestMap(result.rootPath);
+      if (map.suggest) {
+        nudges.push(
+          `Context Autopilot: this repo has substantial agent navigation but no codebase map. At a natural pause, offer to run \`ctxlayer map\` — it distills an architecture note (key files + where things live) from what agents keep looking up, so future sessions start warm. Ask before running; nothing is written without approval.`,
+        );
+      }
+    } catch {
+      // a nudge must never break session start
+    }
+    if (nudges.length > 0) console.log(nudges.join('\n\n'));
     return;
   }
   if (fresh.length === 0) {
@@ -420,30 +434,20 @@ async function cmdExport(flags: Flags): Promise<void> {
  */
 async function cmdMap(flags: Flags): Promise<void> {
   const projectPath = projectDir(flags);
-  const accesses = await readToolAccesses(projectPath);
-  const signals = aggregateAccesses(accesses);
-  if (signals.files.length === 0) {
+  // Peek at the signals first, so a "nothing to map" exit costs no model call.
+  const preSignals = aggregateAccesses(await readToolAccesses(projectPath));
+  if (preSignals.files.length === 0) {
     console.log(
       `No agent navigation found for ${projectPath}.\nThe codebase map is built from Claude Code sessions in this project — work in it with the agent first, then re-run.`,
     );
     return;
   }
-  // Ground each role in the file's real header, not a guess from the path.
-  const snippets: Record<string, string> = {};
-  for (const f of signals.files) {
-    try {
-      snippets[f.path] = (await readFile(join(projectPath, f.path), 'utf8')).split('\n').slice(0, 25).join('\n');
-    } catch {
-      // file may have moved since the sessions — the distiller still has counts
-    }
-  }
-
   if (!flags.json) {
     console.log(
-      `Mapping ${projectPath} from ${signals.sessionsAnalyzed} session(s) (${signals.accessCount} tool accesses) with ${process.env.ANTHROPIC_API_KEY ? 'the Anthropic API' : 'your local `claude` CLI'}…`,
+      `Mapping ${projectPath} from ${preSignals.sessionsAnalyzed} session(s) (${preSignals.accessCount} tool accesses) with ${process.env.ANTHROPIC_API_KEY ? 'the Anthropic API' : 'your local `claude` CLI'}…`,
     );
   }
-  const result = await distillCodemap(signals, { snippets, model: flags.model });
+  const { signals, result } = await generateCodemap(projectPath, { model: flags.model });
   if (result.files.length === 0 && result.notes.length === 0) {
     console.log('The distiller produced no map — not enough coherent structure yet.');
     return;
