@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aopsRoot, DEFAULT_CONFIG } from '../dist/ambient/config.js';
 import { appendRecord, type ActivityRecord } from '../dist/ambient/records.js';
-import { maybeAutoDistill } from '../dist/ambient/observer.js';
+import { maybeAutoDistill, SegmentTracker } from '../dist/ambient/observer.js';
 import {
   applyWorkflowDecisions,
   buildEpisodes,
@@ -189,6 +189,45 @@ test('slugify produces filesystem-safe slugs', () => {
   assert.equal(slugify('Weekly metrics report'), 'weekly-metrics-report');
   assert.equal(slugify('  Émail — l\'export (v2)!  '), 'mail-l-export-v2');
   assert.equal(slugify('!!!'), 'aop');
+});
+
+// ---------------------------------------------------------------------------
+// Activity segment tracking
+
+test('SegmentTracker closes a segment on context change with active time + cadence', () => {
+  const t = new SegmentTracker();
+  const S = 1000;
+  // Chrome for 3 ticks (2s each), user active, typing.
+  assert.equal(t.sample({ now: 0, app: 'Chrome', title: 'Gmail', idleSeconds: 0, keys: 100, clicks: 10 }), null);
+  assert.equal(t.sample({ now: 2 * S, app: 'Chrome', title: 'Gmail', idleSeconds: 0, keys: 130, clicks: 12 }), null);
+  assert.equal(t.sample({ now: 4 * S, app: 'Chrome', title: 'Gmail', idleSeconds: 0, keys: 150, clicks: 15 }), null);
+  // Switch to Slack → the Chrome segment is emitted.
+  const seg = t.sample({ now: 6 * S, app: 'Slack', title: '#general', idleSeconds: 0, keys: 150, clicks: 15 });
+  assert.ok(seg, 'context change emits the finished segment');
+  assert.equal(seg!.app, 'Chrome');
+  assert.equal(seg!.windowTitle, 'Gmail');
+  assert.equal(seg!.seconds, 4, 'start 0 → last sample at 4s');
+  assert.equal(seg!.activeSeconds, 4, 'never idle → all active');
+  assert.equal(seg!.keys, 50, '150 − 100 keydowns');
+  assert.equal(seg!.clicks, 5, '15 − 10 clicks');
+});
+
+test('SegmentTracker counts idle time as inactive and drops sub-flicker segments', () => {
+  const t = new SegmentTracker();
+  const S = 1000;
+  // Active 2s, then idle for the next stretch.
+  t.sample({ now: 0, app: 'Xcode', title: 'App.swift', idleSeconds: 0, keys: 0, clicks: 0 });
+  t.sample({ now: 2 * S, app: 'Xcode', title: 'App.swift', idleSeconds: 1, keys: 5, clicks: 0 });
+  t.sample({ now: 4 * S, app: 'Xcode', title: 'App.swift', idleSeconds: 120, keys: 5, clicks: 0 });
+  const seg = t.flush()!;
+  assert.equal(seg.seconds, 4);
+  assert.equal(seg.activeSeconds, 2, 'only the first 2s counted as active');
+
+  // A flicker (<4s) is discarded.
+  const t2 = new SegmentTracker();
+  t2.sample({ now: 0, app: 'Finder', title: 'Downloads', idleSeconds: 0, keys: 0, clicks: 0 });
+  const flick = t2.sample({ now: 1 * S, app: 'Mail', title: 'Inbox', idleSeconds: 0, keys: 0, clicks: 0 });
+  assert.equal(flick, null, 'a 1-second Finder blip is not recorded');
 });
 
 // ---------------------------------------------------------------------------

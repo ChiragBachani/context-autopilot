@@ -29,6 +29,7 @@ import {
   uninstallLaunchAgents,
 } from './ambient/observer.js';
 import { dayKey, readAllDays, readDay } from './ambient/records.js';
+import { narrateDay, renderSummaryText, summarizeDayFromDisk } from './ambient/summarize.js';
 import {
   applyWorkflowDecisions,
   buildEpisodes,
@@ -72,6 +73,7 @@ interface Flags {
   pause?: number;
   agent?: boolean;
   notify?: boolean;
+  narrate?: boolean;
 }
 
 function parseArgs(argv: string[]): { command: string; flags: Flags } {
@@ -119,6 +121,9 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
         break;
       case '--notify':
         flags.notify = true;
+        break;
+      case '--narrate':
+        flags.narrate = true;
         break;
       case '--global':
       case '-g':
@@ -575,6 +580,27 @@ async function cmdDashboard(): Promise<void> {
   console.log(`dashboard at http://localhost:${port} — Ctrl-C to stop.`);
 }
 
+async function cmdSummary(flags: Flags): Promise<void> {
+  const day = dayKey();
+  const summary = summarizeDayFromDisk(day);
+  if (flags.json) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+  console.log('\n' + renderSummaryText(summary));
+  if (summary.segmentCount === 0) {
+    console.log('\nStart observing with `ctxlayer observe`, then work as usual — this fills in through the day.');
+    return;
+  }
+  // A model narrative is opt-in (costs a call); stats above are always free.
+  if (flags.narrate) {
+    console.log('\nRecap:');
+    console.log('  ' + (await narrateDay(summary, { model: flags.model })).replace(/\n/g, '\n  '));
+  } else {
+    console.log('\nAdd --narrate for a plain-English recap of your day.');
+  }
+}
+
 function screenCandidates() {
   const episodesByDay = new Map<string, ReturnType<typeof buildEpisodes>>();
   for (const [day, records] of readAllDays()) episodesByDay.set(day, buildEpisodes(day, records));
@@ -713,6 +739,7 @@ Ambient (macOS — screen observation, 100% local):
   dashboard  Open the local dashboard (timeline, patterns, automations, controls)
   journal    Alias for dashboard
   aop        Review workflow proposals in the terminal; list automations
+  summary    Today's work at a glance (time per app, focus, cadence); --narrate for a recap
   scan/distill --source screen   mine observed days for repeated workflows
 
 Options:
@@ -760,6 +787,8 @@ async function main(): Promise<void> {
       return cmdDashboard();
     case 'aop':
       return cmdAop(flags);
+    case 'summary':
+      return cmdSummary(flags);
     default:
       return help();
   }

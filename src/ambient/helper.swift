@@ -5,6 +5,7 @@
  *
  *   ctxhelper ocr <image>              print recognized text lines (Apple Vision)
  *   ctxhelper perm screen              print "granted" | "denied" (Screen Recording)
+ *   ctxhelper keycount                 print "<keyDowns> <clicks>" (cumulative COUNTS only, never content)
  *   ctxhelper fixture <out.png> <title> <line>…   render a fake-app screenshot for tests/demo
  */
 
@@ -39,6 +40,16 @@ func runOcr(_ path: String) {
       print(candidate.string)
     }
   }
+}
+
+/// Print cumulative COUNTS of key-downs and mouse clicks this login session —
+/// a typing/activity cadence signal only. Never the keys themselves: the OS
+/// exposes just an integer tally via CGEventSource, so there is nothing here
+/// that could reconstruct what was typed.
+func runKeyCount() {
+  let keys = CGEventSource.counterForEventType(.combinedSessionState, eventType: .keyDown)
+  let clicks = CGEventSource.counterForEventType(.combinedSessionState, eventType: .leftMouseDown)
+  print("\(keys) \(clicks)")
 }
 
 func runPerm(_ what: String) {
@@ -103,8 +114,10 @@ case "ocr" where args.count == 2:
   runOcr(args[1])
 case "perm" where args.count == 2:
   runPerm(args[1])
+case "keycount":
+  runKeyCount()
 case "fixture" where args.count >= 4:
   runFixture(args[1], args[2], Array(args.dropFirst(3)))
 default:
-  fail("usage: ctxhelper ocr <image> | perm screen | fixture <out.png> <title> <line>…")
+  fail("usage: ctxhelper ocr <image> | perm screen | keycount | fixture <out.png> <title> <line>…")
 }

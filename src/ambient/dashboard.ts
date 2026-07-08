@@ -20,6 +20,7 @@ import {
   screenshotStats,
 } from './records.js';
 import { launchAopInTerminal, observerAlive } from './observer.js';
+import { narrateDay, summarizeDayFromDisk } from './summarize.js';
 import { applyWorkflowDecisions, loadAops, loadWorkflowProposals, setAopEnabled } from './workflows.js';
 
 async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -73,6 +74,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return;
     }
     if (req.method === 'GET' && path === '/api/status') return json(res, statusPayload());
+    if (req.method === 'GET' && path === '/api/summary') {
+      return json(res, summarizeDayFromDisk(dayKey()));
+    }
+    if (req.method === 'POST' && path === '/api/summary/narrate') {
+      const summary = summarizeDayFromDisk(dayKey());
+      try {
+        return json(res, { narrative: await narrateDay(summary) });
+      } catch (err) {
+        return json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
     if (req.method === 'GET' && path === '/api/days') return json(res, listDays());
     if (req.method === 'GET' && path === '/api/day') {
       const day = url.searchParams.get('d') ?? dayKey();
@@ -243,6 +255,16 @@ const PAGE = `<!doctype html>
   .run{background:var(--accent2);color:#fff}
   .ghost{background:var(--bg2);color:var(--text);border:1px solid var(--border)!important}
   .danger{background:rgba(255,93,93,.12);color:var(--danger);border:1px solid rgba(255,93,93,.35)!important}
+  .summary-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:12px}
+  .summary-head h3{font-size:15px}
+  .usebars{display:flex;flex-direction:column;gap:7px;margin-top:4px}
+  .usebar{display:grid;grid-template-columns:150px 1fr auto;align-items:center;gap:10px;font-size:13px}
+  .usebar .bar{height:8px;border-radius:5px;background:var(--accent);min-width:2px}
+  .usebar .bar.site{background:var(--accent2)}
+  .usebar .amt{color:var(--muted);font-variant-numeric:tabular-nums}
+  .summary .metrics{display:flex;gap:22px;flex-wrap:wrap;margin-bottom:10px;color:var(--muted);font-size:13px}
+  .summary .metrics b{color:var(--text);font-size:15px}
+  .narrative{margin-top:14px;padding:13px 15px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;line-height:1.6}
   .minebar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px}
   .minebar .muted{font-size:13px;color:var(--muted)}
   #minebtn:disabled{opacity:.55;cursor:default}
@@ -283,6 +305,14 @@ const PAGE = `<!doctype html>
       <div class="stat"><b id="s-minutes">–</b><span>minutes observed</span></div>
       <div class="stat"><b id="s-apps">–</b><span>apps</span></div>
       <div class="stat"><b id="s-patterns">–</b><span>patterns awaiting review</span></div>
+    </div>
+    <div class="card summary" id="summary-card">
+      <div class="summary-head">
+        <h3>Your day so far</h3>
+        <button class="act approve" id="narrate-btn" onclick="narrateDay()">✨ Summarize my day</button>
+      </div>
+      <div id="summary-body"><div class="empty">Nothing observed yet today.</div></div>
+      <div id="narrative" class="narrative" style="display:none"></div>
     </div>
     <div class="card"><div id="timeline"><div class="empty">Nothing observed yet today.</div></div></div>
   </section>
@@ -344,6 +374,7 @@ document.querySelectorAll('nav button').forEach(function(btn){
     ['today','patterns','autos','controls'].forEach(function(t){
       document.getElementById('tab-'+t).style.display = (btn.dataset.tab===t) ? '' : 'none';
     });
+    if (btn.dataset.tab==='today') refreshSummary();
     if (btn.dataset.tab==='patterns') loadProposals();
     if (btn.dataset.tab==='autos') loadAops();
   };
@@ -393,6 +424,44 @@ function refreshTimeline(){
         + '<div class="title">'+esc(r.windowTitle)+'</div></div>'+thumb+'</div>';
     }).join('');
   }).catch(function(){});
+}
+
+function fmtDur(sec){ var m=Math.round(sec/60); if(m<60) return m+'m'; return Math.floor(m/60)+'h '+(m%60)+'m'; }
+
+function refreshSummary(){
+  api('/api/summary').then(function(s){
+    var body = document.getElementById('summary-body');
+    var btn = document.getElementById('narrate-btn');
+    if (!s.segmentCount){ body.innerHTML = '<div class="empty">Nothing observed yet today.</div>'; btn.disabled = true; return; }
+    btn.disabled = false;
+    var maxApp = Math.max.apply(null, s.apps.map(function(a){return a.activeSeconds;}).concat([1]));
+    var maxSite = Math.max.apply(null, s.sites.map(function(x){return x.seconds;}).concat([1]));
+    var metrics = '<div class="metrics">'
+      + '<span><b>'+fmtDur(s.activeSeconds)+'</b> active</span>'
+      + '<span><b>'+fmtDur(s.totalSeconds)+'</b> observed</span>'
+      + '<span><b>'+s.keys.toLocaleString()+'</b> keystrokes</span>'
+      + '<span><b>'+s.clicks.toLocaleString()+'</b> clicks</span>'
+      + (s.busiestHour ? '<span>busiest <b>'+((s.busiestHour.hour%12||12))+(s.busiestHour.hour<12?'am':'pm')+'</b></span>' : '')
+      + '</div>';
+    var apps = s.apps.map(function(a){
+      return '<div class="usebar"><span>'+esc(a.app)+'</span><span class="bar" style="width:'+Math.round(a.activeSeconds/maxApp*100)+'%"></span><span class="amt">'+fmtDur(a.activeSeconds)+'</span></div>';
+    }).join('');
+    var sites = s.sites.length ? '<div class="muted" style="margin:12px 0 4px">Top sites</div>' + s.sites.map(function(x){
+      return '<div class="usebar"><span>'+esc(x.host)+'</span><span class="bar site" style="width:'+Math.round(x.seconds/maxSite*100)+'%"></span><span class="amt">'+fmtDur(x.seconds)+'</span></div>';
+    }).join('') : '';
+    body.innerHTML = metrics + '<div class="usebars">'+apps+'</div>' + (sites?'<div class="usebars">'+sites+'</div>':'');
+  }).catch(function(){});
+}
+
+function narrateDay(){
+  var btn = document.getElementById('narrate-btn');
+  var box = document.getElementById('narrative');
+  btn.disabled = true; btn.textContent = 'Thinking…';
+  box.style.display = 'block'; box.textContent = 'Reading your day…';
+  api('/api/summary/narrate', {}).then(function(r){
+    box.textContent = r.narrative || r.error || 'Could not summarize right now.';
+    btn.disabled = false; btn.textContent = '✨ Summarize my day';
+  }).catch(function(){ box.textContent = 'Could not summarize right now.'; btn.disabled = false; btn.textContent = '✨ Summarize my day'; });
 }
 
 function lightbox(src){
@@ -484,9 +553,10 @@ document.getElementById('textonly').addEventListener('change', function(e){
   api('/api/config', {textOnly: e.target.checked}).then(refreshStatus);
 });
 
-refreshStatus(); refreshTimeline();
+refreshStatus(); refreshTimeline(); refreshSummary();
 setInterval(refreshStatus, 4000);
 setInterval(refreshTimeline, 4000);
+setInterval(refreshSummary, 8000);
 </script>
 </body>
 </html>`;

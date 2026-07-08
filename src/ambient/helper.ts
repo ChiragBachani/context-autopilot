@@ -84,6 +84,19 @@ export function ocr(imagePath: string): string[] | null {
     .filter(Boolean);
 }
 
+/**
+ * Cumulative key-down and click COUNTS for this login session (never content).
+ * Diffed over a segment, this yields typing/click cadence. Null = helper
+ * unavailable, in which case cadence is simply omitted.
+ */
+export function keyCount(): { keys: number; clicks: number } | null {
+  const out = run(['keycount'], 5_000);
+  if (out === null) return null;
+  const [keys, clicks] = out.trim().split(/\s+/).map(Number);
+  if (!Number.isFinite(keys) || !Number.isFinite(clicks)) return null;
+  return { keys, clicks };
+}
+
 /** Screen Recording permission state without prompting. 'unknown' = helper unavailable. */
 export function screenPermission(): 'granted' | 'denied' | 'unknown' {
   const out = run(['perm', 'screen'], 10_000);

@@ -27,6 +27,54 @@ export interface ActivityRecord {
   url?: string;
 }
 
+/**
+ * A stretch of continuous work in one app/window — the dense activity log that
+ * powers the day summary. Sampled every observer tick (cheap: app/window + an
+ * idle-time and keystroke-COUNT reading), so a day is thousands of data points,
+ * not the handful of screenshots. Stored per day at
+ * ~/.ctxlayer/ambient/YYYY-MM-DD/activity.jsonl, separate from screenshots.
+ */
+export interface ActivitySegment {
+  app: string;
+  windowTitle: string;
+  /** Active-tab URL when the app was a browser. */
+  url?: string;
+  /** ISO 8601. */
+  start: string;
+  end: string;
+  /** Wall-clock seconds spent in this segment. */
+  seconds: number;
+  /** Of those, seconds the user was actively at the machine (not idle). */
+  activeSeconds: number;
+  /** Key-downs during the segment (COUNT only — never content). */
+  keys: number;
+  /** Mouse clicks during the segment. */
+  clicks: number;
+}
+
+export function appendSegment(segment: ActivitySegment): void {
+  const day = segment.start.slice(0, 10);
+  const dir = dayDir(day);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, 'activity.jsonl'), JSON.stringify(segment) + '\n', 'utf8');
+}
+
+export function readDaySegments(day: string): ActivitySegment[] {
+  const path = join(dayDir(day), 'activity.jsonl');
+  if (!existsSync(path)) return [];
+  const segments: ActivitySegment[] = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      segments.push(JSON.parse(line) as ActivitySegment);
+    } catch {
+      continue;
+    }
+  }
+  segments.sort((a, b) => a.start.localeCompare(b.start));
+  return segments;
+}
+
 export function dayKey(date: Date = new Date()): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
