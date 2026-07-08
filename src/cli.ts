@@ -617,10 +617,18 @@ async function cmdDistillScreen(flags: Flags): Promise<void> {
     if (!flags.notify) console.log('The distiller found no coherent workflows to propose.');
     return;
   }
+  // Auto-distill runs periodically — only ping the user when something NEW
+  // showed up, not every time the same unreviewed pattern is re-found.
+  const previousTitles = new Set(
+    (loadWorkflowProposals()?.proposals ?? []).map((p) => p.entry.title.toLowerCase()),
+  );
+  const newTitles = proposals.filter((p) => !previousTitles.has(p.entry.title.toLowerCase()));
   saveWorkflowProposals(proposals);
   if (flags.notify) {
-    // Nightly LaunchAgent path: surface quietly, never interrupt.
-    notify('Context Autopilot', `Found ${proposals.length} automatable pattern(s) in your day — open the dashboard to review.`);
+    // Background path (nightly agent + idle auto-distill): quiet, never interrupt.
+    if (newTitles.length > 0) {
+      notify('Context Autopilot', `Found ${newTitles.length} new automatable pattern(s) — open the dashboard to review.`);
+    }
     return;
   }
   console.log(`\n${proposals.length} workflow proposal(s):\n`);

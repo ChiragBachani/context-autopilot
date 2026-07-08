@@ -358,7 +358,7 @@ function loadProposals(){
     var pending = props.filter(function(p){ return p.status==='pending'; });
     var done = props.filter(function(p){ return p.status!=='pending'; });
     var el = document.getElementById('proposals');
-    if (!props.length) { el.innerHTML = '<div class="card"><div class="empty">No patterns detected yet. Keep working — Autopilot mines your day each evening (or run: ctxlayer distill --source screen).</div></div>'; return; }
+    if (!props.length) { el.innerHTML = '<div class="card"><div class="empty">No patterns detected yet. Keep working — Autopilot mines for patterns every couple of hours (it waits for a moment you step away), plus a nightly sweep. A workflow surfaces once it repeats, even twice in the same day. Impatient? Run: ctxlayer distill --source screen.</div></div>'; return; }
     el.innerHTML = pending.map(function(p){
       var e = p.entry;
       var steps = (e.procedure||[]).map(function(s){ return '<li>'+esc(s)+'</li>'; }).join('');

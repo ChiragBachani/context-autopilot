@@ -122,8 +122,10 @@ export interface WorkflowCandidate {
 }
 
 /**
- * Group episodes whose step sequences recur across at least two distinct
- * days — the definition of "you keep doing this".
+ * Group episodes whose step sequences recur — across days, or twice within
+ * the same day. "You keep doing this" shouldn't have to wait for tomorrow:
+ * same-day repetition surfaces on day one (the distiller rates cross-day
+ * recurrence as higher confidence).
  */
 export function findWorkflowCandidates(episodesByDay: Map<string, Episode[]>): WorkflowCandidate[] {
   const all = [...episodesByDay.values()].flat().filter((e) => e.steps.length >= MIN_STEPS);
@@ -142,7 +144,7 @@ export function findWorkflowCandidates(episodesByDay: Map<string, Episode[]>): W
   const candidates: WorkflowCandidate[] = [];
   for (const group of groups) {
     const days = [...new Set(group.map((e) => e.day))].sort();
-    if (days.length < 2) continue;
+    if (days.length < 2 && group.length < 2) continue; // a single occurrence is never a pattern
     candidates.push({ id: `wf-${candidates.length}`, episodes: group, days });
   }
   candidates.sort((a, b) => b.days.length - a.days.length || b.episodes.length - a.episodes.length);
@@ -187,7 +189,7 @@ function buildWorkflowPrompt(candidates: WorkflowCandidate[]): string {
           return `  Episode on ${episode.day} (${episode.start.slice(11, 16)}–${episode.end.slice(11, 16)}):\n${steps}`;
         })
         .join('\n');
-      return `### Candidate ${i + 1} — recurred on ${candidate.days.length} day(s): ${candidate.days.join(', ')}\n${episodes}`;
+      return `### Candidate ${i + 1} — occurred ${candidate.episodes.length} time(s) across ${candidate.days.length} day(s): ${candidate.days.join(', ')}\n${episodes}`;
     })
     .join('\n\n');
 
@@ -200,7 +202,7 @@ Rules:
 - "rule": one sentence describing when/what (imperative).
 - "procedure": 3-8 imperative steps AN AI AGENT would follow to do this work (not a description of what the human did — instructions for doing it). Be concrete: name the apps, files, URLs (use the <…> addresses shown), and actions visible in the evidence.
 - "trigger": {"app": <app name exactly as it appears in the steps>, "titlePattern": <short distinctive window-title fragment>, "urlPattern": <host or host/path of the FIRST step, if it is a web page — e.g. "mail.google.com">} — the moment the workflow STARTS, so a live observer can offer to take over when the person begins it. Prefer urlPattern for web workflows; it is far more precise than a title.
-- "confidence": "high" if the same sequence appears on 3+ days, "medium" for 2 days, "low" if the pattern is fuzzy.
+- "confidence": "high" if the same sequence appears on 3+ days, "medium" for 2 days, "low" if it only recurred within a single day or the pattern is fuzzy.
 - "rationale": one sentence on why this looks automatable.
 - "evidence": one entry per episode: {"quote": "<day HH:MM–HH:MM: app → app → app>", "timestamp": <episode start ISO>, "sessionId": <day>}.
 - Skip candidates that are not really workflows (respond with fewer objects, or [] if none qualify).
@@ -444,6 +446,8 @@ export interface AmbientState {
   dontAskSlugs: string[];
   /** slug → ISO timestamp of the last live-trigger prompt. */
   lastPrompted: Record<string, string>;
+  /** ISO timestamp of the last periodic auto-distill run. */
+  lastAutoDistillAt?: string;
 }
 
 function statePath(): string {
@@ -458,6 +462,7 @@ export function loadAmbientState(): AmbientState {
       rejectedTitles: raw.rejectedTitles ?? [],
       dontAskSlugs: raw.dontAskSlugs ?? [],
       lastPrompted: raw.lastPrompted ?? {},
+      lastAutoDistillAt: raw.lastAutoDistillAt,
     };
   } catch {
     return { version: 1, rejectedTitles: [], dontAskSlugs: [], lastPrompted: {} };

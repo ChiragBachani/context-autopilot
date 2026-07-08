@@ -123,14 +123,14 @@ Coding transcripts are chapter one. `ctxlayer observe` is chapter two: it watche
 ```
 $ ctxlayer observe --demo    # see the whole pipeline on synthetic data, zero permissions
 $ ctxlayer observe           # the real thing (walks you through the two macOS permission toggles)
-$ ctxlayer observe --install # background at login + nightly pattern mining
+$ ctxlayer observe --install # background at login (mining runs on its own as you work)
 ```
 
 How it works:
 
 1. **Observe** — captures the screen at *intentional moments* only: the end of a burst of activity, dwelling on one window, switching context after real work. Never on a timer, never during video calls or anything blocklisted, and input activity is measured only as idle-time — no keylogging, ever. When the front app is a browser, it also reads the **active tab's URL** so web work is observed as precise domains, not fuzzy window titles (private/incognito tabs are never read, and a URL that trips the blocklist is skipped before any capture).
 2. **Parse** — every capture is OCR'd **on-device** with Apple Vision. Screenshots never leave your Mac; they auto-delete after 14 days (or instantly, in text-only mode).
-3. **Mine** — sequences of app/window steps that recur across days become workflow candidates. Web steps cluster by host + path (e.g. `docs.google.com/spreadsheets`), so a workflow keeps matching across days even as titles, counts, and doc ids change.
+3. **Mine** — sequences of app/window steps that recur become workflow candidates: across days, or even twice within the same day, so results show up on day one. Mining runs automatically every couple of hours — at moments you've stepped away, never mid-flow — with a nightly sweep as backstop. Web steps cluster by host + path (e.g. `docs.google.com/spreadsheets`), so a workflow keeps matching across days even as titles, counts, and doc ids change.
 4. **Surface** — candidates are distilled (via your own `claude` CLI) into Agent Operating Procedures — trigger, step-by-step procedure, evidence — and wait for your approval on the local dashboard at `http://localhost:4780`.
 5. **Automate** — approve one, and the next time you *start* that workflow, a notification offers to take over: one click opens a Claude Code session preloaded with the procedure. For web workflows the trigger is the URL itself (e.g. "you just opened `mail.google.com`"), so the offer is precise; the procedure carries the exact address the agent should start at.
 

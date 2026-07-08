@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { aopsRoot } from '../dist/ambient/config.js';
-import type { ActivityRecord } from '../dist/ambient/records.js';
+import { aopsRoot, DEFAULT_CONFIG } from '../dist/ambient/config.js';
+import { appendRecord, type ActivityRecord } from '../dist/ambient/records.js';
+import { maybeAutoDistill } from '../dist/ambient/observer.js';
 import {
   applyWorkflowDecisions,
   buildEpisodes,
@@ -80,10 +81,22 @@ test('the same morning routine on two days becomes a candidate', () => {
   assert.deepEqual(candidates[0].days, ['2026-06-30', '2026-07-07']);
 });
 
-test('a routine seen on only one day is not a candidate', () => {
+test('a routine seen only once is not a candidate', () => {
   const byDay = new Map<string, Episode[]>();
   byDay.set('2026-07-07', buildEpisodes('2026-07-07', morning('2026-07-07')));
   assert.equal(findWorkflowCandidates(byDay).length, 0);
+});
+
+test('the same routine twice in ONE day surfaces on day one', () => {
+  // Two occurrences separated by >15 min → two episodes, same day. Users
+  // should see results of being observed without waiting for tomorrow.
+  const day = '2026-07-08';
+  const records = [...morning(day), ...morning(day, 40)];
+  const byDay = new Map<string, Episode[]>([[day, buildEpisodes(day, records)]]);
+  const candidates = findWorkflowCandidates(byDay);
+  assert.equal(candidates.length, 1);
+  assert.deepEqual(candidates[0].days, [day]);
+  assert.equal(candidates[0].episodes.length, 2);
 });
 
 test('sequence similarity distinguishes alike and unlike flows', () => {
@@ -176,4 +189,37 @@ test('slugify produces filesystem-safe slugs', () => {
   assert.equal(slugify('Weekly metrics report'), 'weekly-metrics-report');
   assert.equal(slugify('  Émail — l\'export (v2)!  '), 'mail-l-export-v2');
   assert.equal(slugify('!!!'), 'aop');
+});
+
+// ---------------------------------------------------------------------------
+// Periodic auto-distill gating
+
+test('auto-distill fires at sensible moments and is throttled afterwards', () => {
+  const config = { ...DEFAULT_CONFIG }; // 120 min interval, 10 new moments
+  let spawned = 0;
+  const runDistill = () => void spawned++;
+  const log = () => {};
+  // The eval throttle is module state — space every call >5 min apart.
+  let t = Date.now();
+  const next = () => new Date((t += 6 * 60_000));
+
+  // Active user → never fires, regardless of accumulated moments.
+  assert.equal(maybeAutoDistill(config, 1, log, next(), runDistill), false, 'not while actively working');
+
+  // Idle but too little material → no run.
+  for (let i = 0; i < 3; i++) appendRecord(record('Mail', 'Inbox', new Date(t - 60_000 * (i + 1)).toISOString()));
+  assert.equal(maybeAutoDistill(config, 120, log, next(), runDistill), false, 'too few new moments');
+
+  // Enough new moments + idle → fires exactly once…
+  for (let i = 0; i < 10; i++) appendRecord(record('Mail', 'Inbox', new Date(t - 1000 * (i + 1)).toISOString()));
+  assert.equal(maybeAutoDistill(config, 120, log, next(), runDistill), true, 'fires when idle with enough material');
+  assert.equal(spawned, 1);
+
+  // …then the interval throttle holds even with more new material.
+  for (let i = 0; i < 10; i++) appendRecord(record('Mail', 'Inbox', new Date(t + 1000 * (i + 1)).toISOString()));
+  assert.equal(maybeAutoDistill(config, 120, log, next(), runDistill), false, 'throttled by the interval');
+  assert.equal(spawned, 1);
+
+  // Disabled via config → never fires.
+  assert.equal(maybeAutoDistill({ ...config, autoDistillEveryMinutes: 0 }, 120, log, next(), runDistill), false);
 });

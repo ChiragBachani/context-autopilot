@@ -23,6 +23,10 @@ export interface AmbientConfig {
   /** Screenshots older than this are deleted (text records are kept). */
   retentionDays: number;
   dashboardPort: number;
+  /** Auto-distill: wait at least this long between runs (0 disables). */
+  autoDistillEveryMinutes: number;
+  /** Auto-distill: only run once this many new moments have been captured. */
+  autoDistillMinNewMoments: number;
   /** App-name fragments that are never captured (case-insensitive). */
   blocklistApps: string[];
   /** Window-title fragments that are never captured (case-insensitive). */
@@ -35,6 +39,10 @@ export const DEFAULT_CONFIG: AmbientConfig = {
   textOnly: false,
   retentionDays: 14,
   dashboardPort: 4780,
+  // Mine for patterns every couple of hours once enough new moments exist —
+  // waiting for a nightly run makes day one feel dead.
+  autoDistillEveryMinutes: 120,
+  autoDistillMinNewMoments: 10,
   // Password managers and video calls are off-limits out of the box — calls
   // would capture other people's faces and screens.
   blocklistApps: [
