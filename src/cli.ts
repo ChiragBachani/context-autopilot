@@ -591,7 +591,7 @@ async function cmdScanScreen(flags: Flags): Promise<void> {
   const total = [...byDay.values()].reduce((n, r) => n + r.length, 0);
   console.log(`\nScanned ${byDay.size} observed day(s), ${total} captured moment(s)`);
   if (candidates.length === 0) {
-    console.log('No repeated workflows detected yet — patterns emerge once the same sequence shows up on 2+ days.');
+    console.log('No repeated workflows detected yet — patterns emerge once the same sequence shows up twice (same day counts).');
     return;
   }
   console.log(`Found ${candidates.length} workflow candidate(s):\n`);

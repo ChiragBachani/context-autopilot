@@ -5,9 +5,11 @@
  * `ctxlayer dashboard`.
  */
 
+import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ambientRoot, loadConfig, pauseFor, saveConfig, setEnabled } from './config.js';
 import {
   dayKey,
@@ -109,6 +111,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       launchAopInTerminal(aop);
       return json(res, { launched: aop.slug });
     }
+    if (req.method === 'POST' && path === '/api/distill') {
+      return json(res, startManualDistill());
+    }
+    if (req.method === 'GET' && path === '/api/distill/status') {
+      return json(res, {
+        running: distillChildRunning,
+        lastFinishedAt: distillLastFinishedAt,
+        proposalsGeneratedAt: loadWorkflowProposals()?.generatedAt ?? null,
+      });
+    }
     if (req.method === 'POST' && path === '/api/control') {
       const body = await readBody(req);
       if (body.action === 'on') return json(res, { config: setEnabled(true) });
@@ -136,6 +148,32 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   } catch (err) {
     json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Manual distill (the "Mine now" button)
+//
+// Runs as a child process so the model call never blocks this server (which
+// may be the observer daemon itself). Not detached: we track its exit to
+// report "running" honestly to the page.
+
+let distillChildRunning = false;
+let distillLastFinishedAt: string | null = null;
+
+function startManualDistill(): { started: boolean; reason?: string } {
+  if (distillChildRunning) return { started: false, reason: 'already running' };
+  const cli = fileURLToPath(new URL('../cli.js', import.meta.url));
+  distillChildRunning = true;
+  const child = spawn(process.execPath, [cli, 'distill', '--source', 'screen'], { stdio: 'ignore' });
+  child.on('close', () => {
+    distillChildRunning = false;
+    distillLastFinishedAt = new Date().toISOString();
+  });
+  child.on('error', () => {
+    distillChildRunning = false;
+    distillLastFinishedAt = new Date().toISOString();
+  });
+  return { started: true };
 }
 
 /** Start the dashboard. Resolves null when the port is already taken (daemon + standalone coexist). */
@@ -205,6 +243,9 @@ const PAGE = `<!doctype html>
   .run{background:var(--accent2);color:#fff}
   .ghost{background:var(--bg2);color:var(--text);border:1px solid var(--border)!important}
   .danger{background:rgba(255,93,93,.12);color:var(--danger);border:1px solid rgba(255,93,93,.35)!important}
+  .minebar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px}
+  .minebar .muted{font-size:13px;color:var(--muted)}
+  #minebtn:disabled{opacity:.55;cursor:default}
   .offswitch{display:flex;align-items:center;justify-content:space-between;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:14px}
   .offswitch b{font-size:16px}
   .offswitch .state{font-size:13px;color:var(--muted)}
@@ -246,7 +287,13 @@ const PAGE = `<!doctype html>
     <div class="card"><div id="timeline"><div class="empty">Nothing observed yet today.</div></div></div>
   </section>
 
-  <section id="tab-patterns" style="display:none"><div id="proposals"></div></section>
+  <section id="tab-patterns" style="display:none">
+    <div class="minebar">
+      <span class="muted" id="mine-hint">Autopilot mines on its own every couple of hours — or mine right now.</span>
+      <button class="act approve" id="minebtn" onclick="mineNow()">⛏ Mine now</button>
+    </div>
+    <div id="proposals"></div>
+  </section>
   <section id="tab-autos" style="display:none"><div id="aops"></div></section>
 
   <section id="tab-controls" style="display:none">
@@ -351,6 +398,25 @@ function refreshTimeline(){
 function lightbox(src){
   document.getElementById('lightimg').src = src;
   document.getElementById('lightbox').style.display = 'flex';
+}
+
+function mineNow(){
+  var btn = document.getElementById('minebtn');
+  var hint = document.getElementById('mine-hint');
+  btn.disabled = true; btn.textContent = 'Mining…';
+  hint.textContent = 'Reading today\\'s moments and looking for repeated workflows (up to a minute or two)…';
+  api('/api/distill', {}).then(function(r){
+    if (!r.started) { hint.textContent = 'A mining run is already in progress — results will appear here.'; }
+    var poll = setInterval(function(){
+      api('/api/distill/status').then(function(s){
+        if (s.running) return;
+        clearInterval(poll);
+        btn.disabled = false; btn.textContent = '⛏ Mine now';
+        loadProposals();
+        hint.textContent = 'Done. New patterns (if any) are below — a workflow surfaces once it repeats, even twice in one day.';
+      });
+    }, 3000);
+  });
 }
 
 function loadProposals(){
