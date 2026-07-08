@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeDay } from '../dist/ambient/summarize.js';
-import type { ActivitySegment } from '../dist/ambient/records.js';
+import { buildDayEvidence, summarizeDay } from '../dist/ambient/summarize.js';
+import type { ActivityRecord, ActivitySegment } from '../dist/ambient/records.js';
 
 function seg(app: string, title: string, start: string, seconds: number, activeSeconds: number, extra: Partial<ActivitySegment> = {}): ActivitySegment {
   const end = new Date(Date.parse(start) + seconds * 1000).toISOString();
@@ -37,6 +37,37 @@ test('summarizeDay aggregates time, ranks apps by active time, and pulls out sit
 
   // Busiest hour is 09 (local): the bulk of active time lands there.
   assert.ok(s.busiestHour);
+});
+
+test('buildDayEvidence interleaves segments and OCR digests chronologically', () => {
+  const day = '2026-07-08';
+  const segments: ActivitySegment[] = [
+    seg('Cursor', 'MORNING.md — context-autopilot', `${day}T09:00:00.000Z`, 300, 280, { keys: 400 }),
+    seg('Google Chrome', 'Submit to r/ClaudeAI', `${day}T09:10:00.000Z`, 240, 200, {
+      keys: 500,
+      url: 'https://www.reddit.com/r/ClaudeAI/submit',
+    }),
+    seg('Finder', 'Downloads', `${day}T09:20:00.000Z`, 5, 5), // <10s → dropped as flicker
+  ];
+  const records: ActivityRecord[] = [
+    {
+      id: 'r1',
+      timestamp: `${day}T09:12:00.000Z`,
+      app: 'Google Chrome',
+      windowTitle: 'Submit to r/ClaudeAI',
+      trigger: 'dwell',
+      url: 'https://www.reddit.com/r/ClaudeAI/submit',
+      text: 'Launching Context Autopilot: mine your sessions into CLAUDE.md rules',
+    },
+    { id: 'r2', timestamp: `${day}T09:01:00.000Z`, app: 'Cursor', windowTitle: 'MORNING.md', trigger: 'dwell' }, // no text → skipped
+  ];
+  const evidence = buildDayEvidence(segments, records);
+  const lines = evidence.split('\n');
+  assert.equal(lines.length, 3, 'two segments + one OCR digest; flicker and textless record dropped');
+  assert.ok(lines[0].includes('MORNING.md'), 'chronological: Cursor first');
+  assert.ok(lines[1].includes('reddit.com/r/ClaudeAI'), 'URL carried into evidence');
+  assert.ok(lines[1].includes('typing (500 keys)'), 'typing cadence surfaces');
+  assert.ok(lines[2].includes('screen showed: "Launching Context Autopilot'), 'OCR text lands in the log');
 });
 
 test('summarizeDay on an empty day is well-formed and zeroed', () => {

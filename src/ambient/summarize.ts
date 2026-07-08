@@ -8,7 +8,7 @@
 
 import { runModel } from '../distill.js';
 import { hostOf } from './browser.js';
-import { readDaySegments, type ActivitySegment } from './records.js';
+import { readDay, readDaySegments, type ActivityRecord, type ActivitySegment } from './records.js';
 
 export interface AppUsage {
   app: string;
@@ -144,10 +144,66 @@ export interface NarrateOptions {
   runModel?: (prompt: string, model?: string) => Promise<string>;
 }
 
+/** Keep the evidence log inside a sane prompt budget. */
+const EVIDENCE_MAX_LINES = 120;
+const EVIDENCE_MAX_CHARS = 14_000;
+const EVIDENCE_OCR_CLIP = 220;
+
 /**
- * Turn the stats into a short, plain-English recap of the day via the user's
- * own model. Sends only the aggregate numbers/app names — never screenshots or
- * keystroke content.
+ * A compact, chronological log of what was actually on screen: activity
+ * segments (app, window title, url, time spent) interleaved with the OCR
+ * digests of captured moments. This is what lets the recap say "you drafted a
+ * Reddit post about your MCP launch" instead of "you used Chrome for 11m".
+ * Long days are thinned evenly rather than truncated at noon.
+ */
+export function buildDayEvidence(
+  segments: ActivitySegment[],
+  records: ActivityRecord[],
+): string {
+  interface Line {
+    at: string;
+    text: string;
+  }
+  const lines: Line[] = [];
+  for (const s of segments) {
+    // Sub-flicker context changes add noise, not story.
+    if (s.seconds < 10) continue;
+    const when = `${s.start.slice(11, 16)}–${s.end.slice(11, 16)}`;
+    const where = s.url ? ` <${s.url}>` : '';
+    const cadence = s.keys > 30 ? `, typing (${s.keys} keys)` : '';
+    lines.push({
+      at: s.start,
+      text: `${when} [${s.app}]${where} "${s.windowTitle}" — ${formatDuration(s.activeSeconds)} active${cadence}`,
+    });
+  }
+  for (const r of records) {
+    if (!r.text) continue;
+    const digest = r.text.replace(/\s+/g, ' ').slice(0, EVIDENCE_OCR_CLIP);
+    const where = r.url ? ` <${r.url}>` : '';
+    lines.push({
+      at: r.timestamp,
+      text: `${r.timestamp.slice(11, 16)} [${r.app}]${where} screen showed: "${digest}"`,
+    });
+  }
+  lines.sort((a, b) => a.at.localeCompare(b.at));
+
+  // Thin evenly so morning and evening both survive the budget.
+  let kept = lines;
+  if (kept.length > EVIDENCE_MAX_LINES) {
+    const step = kept.length / EVIDENCE_MAX_LINES;
+    kept = Array.from({ length: EVIDENCE_MAX_LINES }, (_, i) => kept[Math.floor(i * step)]);
+  }
+  let out = kept.map((l) => l.text).join('\n');
+  if (out.length > EVIDENCE_MAX_CHARS) out = out.slice(0, EVIDENCE_MAX_CHARS) + '…';
+  return out;
+}
+
+/**
+ * Turn the day into a plain-English recap via the user's own model — grounded
+ * in what was actually on screen (window titles, URLs, on-device OCR excerpts),
+ * so it can name the post you wrote and the file you pulled from. Raw
+ * screenshots and keystroke content never leave the machine; this sends the
+ * same kind of extracted text excerpts the workflow distiller already uses.
  */
 export async function narrateDay(summary: DaySummary, opts: NarrateOptions = {}): Promise<string> {
   if (summary.segmentCount === 0) return 'Nothing observed yet today — the recap fills in as you work.';
@@ -162,9 +218,21 @@ export async function narrateDay(summary: DaySummary, opts: NarrateOptions = {})
     apps: summary.apps.map((a) => ({ app: a.app, active: formatDuration(a.activeSeconds) })),
     sites: summary.sites.map((s) => ({ host: s.host, time: formatDuration(s.seconds) })),
   };
-  const prompt = `You are summarizing one person's work day from ambient activity stats (app/window focus time, typing/click counts, web hosts visited). Write a warm, concise recap in 2–4 sentences: what they mostly worked on, how the time was split, and one honest observation (e.g. deep focus in one app, or lots of context-switching). Be specific using the app and site names. Do not invent tasks not implied by the data. No preamble, no bullet points — just the recap.
+  const evidence = buildDayEvidence(readDaySegments(summary.day), readDay(summary.day));
+  const prompt = `You are recapping one person's work day from ambient observation: a chronological evidence log (window titles, URLs, durations, and text that was visibly on screen) plus aggregate stats. Write a specific, concrete recap of WHAT THEY ACTUALLY DID, in 3–6 sentences.
 
-Stats (JSON):
+Rules:
+- Name the actual things: the post they drafted and where, the document/file they read or edited, the site and what they did there — pull these from the window titles, URLs, and on-screen text.
+- Tell it roughly in order ("you started with…, then…").
+- Prefer specifics over categories: "drafted a Reddit post in r/ClaudeAI about the Context Autopilot launch" beats "browsed Reddit".
+- If the evidence is thin for a stretch, say what's visible without inventing detail. Never fabricate names or tasks the evidence doesn't support.
+- End with one honest observation about the shape of the day (focus, switching, a theme).
+- No preamble, no bullet points — just the recap, addressed as "you".
+
+## Evidence log (chronological)
+${evidence || '(no on-screen evidence captured yet)'}
+
+## Aggregate stats (JSON)
 ${JSON.stringify(facts, null, 2)}`;
   const out = await call(prompt, opts.model);
   return out.trim();
