@@ -65,6 +65,7 @@ npm install -g context-autopilot   # or use npx, no install
 | `ctxlayer apply` | Review proposals interactively; write accepted ones |
 | `ctxlayer check` | Fast, model-free: how many new signals since the last distill? `--hook` prints a nudge only past `--threshold` (default 3), else stays silent |
 | `ctxlayer stale` | Find context-file references the repo has outgrown — missing files, removed npm scripts. Exits 1 on findings, so it drops straight into CI |
+| `ctxlayer map` | Distill an architecture note from what agents keep looking up (files read/edited, symbols grepped) into a managed block in CLAUDE.md / AGENTS.md |
 | `ctxlayer export` | Export distilled entries as Agent Operating Procedure JSON |
 
 ### Global mode
@@ -78,6 +79,16 @@ Project context files hold repo conventions — but some feedback is about *you*
 Options: `--project <path>`, `--global`, `--source claude-code|cursor|all`, `--model <model>`, `--min-score <n>`, `--yes`, `--json`.
 
 Cursor session mining reads Cursor's local SQLite storage via Node's built-in `node:sqlite` (Node 22+; on older Node the Cursor source is skipped gracefully).
+
+### Codebase map
+
+```bash
+ctxlayer map
+```
+
+Every fresh session, an agent cold-reads your repo — the same files, the same "where does X live?" greps, over and over. That re-derivation is repeated work, and repeated work is exactly what Autopilot absorbs. `ctxlayer map` mines your Claude Code transcripts for what agents *actually navigate* — the files read and edited most across sessions, and the symbols repeatedly searched — and distills a concise architecture note (key files + "where things live") into a managed block in `CLAUDE.md` / `AGENTS.md`, so the next session starts warm.
+
+It's evidence-based like everything else: roles are grounded in each file's real header, not guessed from its path; file accesses are attributed by where the file physically lives (so edits made from a parent-directory session still count); and the map's file references are picked up by `ctxlayer stale`, so it's flagged the moment a listed file moves. Nothing is written until you approve.
 
 ### Claude Code plugin
 
@@ -101,7 +112,7 @@ Then ask Claude to "update project context from my session history" — or don't
 }
 ```
 
-Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_proposals`, `distill_global_context`, `apply_context_proposals`, and `find_stale_context`.
+Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_proposals`, `distill_global_context`, `apply_context_proposals`, `find_stale_context`, `distill_codebase_map`, and `apply_codebase_map` (plus the ambient tools `scan_ambient_activity`, `distill_workflow_proposals`, `approve_aop`).
 
 The approval loop closes entirely inside chat: distill tools return each proposal with its evidence and instruct the agent to ask you which to accept; `apply_context_proposals` then writes **exactly** the titles you approved, remembers the ones you rejected (never re-proposed), and leaves the rest pending. No tool ever touches a context file without your explicit decision.
 
@@ -146,8 +157,8 @@ Everything runs on your machine. Transcripts are parsed locally; only the extrac
 
 Coding agents are chapter one. The engine is source-agnostic — it distills *observations of work* into Agent Operating Procedures (AOPs):
 
-- **Now:** Claude Code + Cursor sessions → CLAUDE.md / AGENTS.md; global cross-project rules (`--global`); staleness detection (`ctxlayer stale`); **ambient screen observation → workflow AOPs with live take-over offers (macOS)**
-- **Next:** team-shared context; a GitHub Action for context linting in CI; browser-workflow adapter
+- **Now:** Claude Code + Cursor sessions → CLAUDE.md / AGENTS.md; global cross-project rules (`--global`); staleness detection (`ctxlayer stale`); **codebase map from agent navigation (`ctxlayer map`)**; **ambient screen observation → workflow AOPs with live take-over offers (macOS)** with active-tab URL enrichment
+- **Next:** team-shared context; a GitHub Action for context linting in CI; browser-workflow execution (drive Chrome for approved web AOPs)
 - **Later:** fully hands-off AOP execution — agents absorb the work you repeat, without you ever "building an agent"
 
 ## License

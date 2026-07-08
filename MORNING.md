@@ -35,6 +35,29 @@ That's the entire loop: *observe → find a pattern → you approve → it takes
 
 ---
 
+## Update 2 — the codebase map (turns the tool on the agent itself)
+
+You made a sharp point: when I have to "figure out how Run it works" by grepping the code, *that's* the problem Context Autopilot exists to kill — the MCP should already have that context so no one re-derives it. So I built it.
+
+**`ctxlayer map`** mines your Claude Code transcripts for what agents actually navigate — the files they read/edit most across sessions, and the symbols they keep grepping ("how does X work?") — and distills a concise **architecture note** into a managed block in `CLAUDE.md` / `AGENTS.md`. Next session starts warm instead of cold-reading the repo.
+
+I ran it on this very repo. From nothing but real navigation evidence + each file's header, it produced things like:
+- *"Pipeline flow: SourceAdapter → Observation → buildSignals → distill → Proposal → propose.ts writes into CLAUDE.md."*
+- *"engine.ts:getAdapters() is the single place new source adapters get registered."*
+- *"cli.ts and mcp.ts are two front-ends over the same pipeline — keep new features usable from both."*
+
+That's exactly the orientation I had to reconstruct by hand. It even flagged that `codemap.ts` was new and not yet in its own map — honest about its freshness.
+
+**To write the map into this repo's context files yourself** (I deliberately didn't — seeding your repo's first CLAUDE.md is your call):
+```bash
+cd "/Users/chiragbachani/Claude/Projects/The Context Layer"
+node dist/cli.js map --yes     # generates + writes CLAUDE.md + AGENTS.md; omit --yes to preview first
+```
+
+It's the same evidence-based, approve-first, staleness-checked philosophy as the rest of the product — and it's exposed over MCP too (`distill_codebase_map` → `apply_codebase_map`), so an agent can offer it in chat when you open an unfamiliar repo.
+
+---
+
 ## Turn it on for real (the actual product)
 
 Three paste-able commands. After this, you never need the terminal again — the dashboard and notifications are the whole interface.

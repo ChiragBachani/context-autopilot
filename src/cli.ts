@@ -13,7 +13,7 @@
 import { createInterface } from 'node:readline/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { discoverAll, observeEverything, observeProject, type SourceName } from './engine.js';
@@ -40,6 +40,8 @@ import {
 } from './ambient/workflows.js';
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
+import { readToolAccesses } from './sources/claude-code.js';
+import { aggregateAccesses, applyCodemap, distillCodemap, renderCodemapBlock } from './codemap.js';
 import { findStaleReferences } from './stale.js';
 import {
   applyToFile,
@@ -411,6 +413,70 @@ async function cmdExport(flags: Flags): Promise<void> {
   console.log(`Exported ${aop.entries.length} AOP entr(ies) to ${out}`);
 }
 
+/**
+ * Codebase map: mine what agents keep re-deriving in this repo (files they
+ * read/edit, symbols they grep) and distill an architecture note into the
+ * project context file — so the next session starts warm.
+ */
+async function cmdMap(flags: Flags): Promise<void> {
+  const projectPath = projectDir(flags);
+  const accesses = await readToolAccesses(projectPath);
+  const signals = aggregateAccesses(accesses);
+  if (signals.files.length === 0) {
+    console.log(
+      `No agent navigation found for ${projectPath}.\nThe codebase map is built from Claude Code sessions in this project — work in it with the agent first, then re-run.`,
+    );
+    return;
+  }
+  // Ground each role in the file's real header, not a guess from the path.
+  const snippets: Record<string, string> = {};
+  for (const f of signals.files) {
+    try {
+      snippets[f.path] = (await readFile(join(projectPath, f.path), 'utf8')).split('\n').slice(0, 25).join('\n');
+    } catch {
+      // file may have moved since the sessions — the distiller still has counts
+    }
+  }
+
+  if (!flags.json) {
+    console.log(
+      `Mapping ${projectPath} from ${signals.sessionsAnalyzed} session(s) (${signals.accessCount} tool accesses) with ${process.env.ANTHROPIC_API_KEY ? 'the Anthropic API' : 'your local `claude` CLI'}…`,
+    );
+  }
+  const result = await distillCodemap(signals, { snippets, model: flags.model });
+  if (result.files.length === 0 && result.notes.length === 0) {
+    console.log('The distiller produced no map — not enough coherent structure yet.');
+    return;
+  }
+
+  const block = renderCodemapBlock(result);
+  if (flags.json) {
+    console.log(JSON.stringify({ projectPath, signals, result }, null, 2));
+    return;
+  }
+  console.log('\n' + block + '\n');
+
+  const write = flags.yes ? true : await confirm('Write this map into CLAUDE.md and AGENTS.md?');
+  if (!write) {
+    console.log('Not written. Re-run with --yes to write, or edit and paste it yourself.');
+    return;
+  }
+  for (const target of ['CLAUDE.md', 'AGENTS.md'] as const) {
+    const { path, created } = await applyCodemap(projectPath, target, result);
+    console.log(`${created ? 'Created' : 'Updated'} ${path}`);
+  }
+}
+
+async function confirm(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`${question} [y/N] `)).trim().toLowerCase();
+    return answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Ambient screen observation
 
@@ -620,6 +686,8 @@ Commands:
   check      Fast, model-free: any new signals since the last distill?
              (--hook: print a nudge only past --threshold; silent otherwise)
   stale      Find context-file references the repo has outgrown (exit 1 if any)
+  map        Distill an architecture note from what agents keep looking up
+             (files read/edited, symbols grepped) into CLAUDE.md / AGENTS.md
   export     Export distilled entries as Agent Operating Procedure JSON
 
 Ambient (macOS — screen observation, 100% local):
@@ -665,6 +733,8 @@ async function main(): Promise<void> {
       return cmdCheck(flags);
     case 'stale':
       return cmdStale(flags);
+    case 'map':
+      return cmdMap(flags);
     case 'export':
       return cmdExport(flags);
     case 'observe':

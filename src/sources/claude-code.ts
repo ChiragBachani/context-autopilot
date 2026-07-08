@@ -9,7 +9,7 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import type { Observation, ObservedProject, SourceAdapter } from '../types.js';
 import { classifyCorrection, looksLikeHarnessBoilerplate, looksLikeInjectedContent } from '../extract.js';
 
@@ -204,6 +204,149 @@ export class ClaudeCodeAdapter implements SourceAdapter {
     }
     return observations;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tool-access extraction (for the codebase map).
+//
+// The same transcripts that reveal what a human repeats also reveal what the
+// *agent* keeps re-deriving: which files it reads, edits, and greps for before
+// it can act. That navigation is the raw evidence for an architecture map — so
+// the next session starts warm instead of cold-reading the codebase again.
+
+/** One thing the agent did to the code: read/edit a file, or search for a term. */
+export interface ToolAccess {
+  kind: 'read' | 'edit' | 'search';
+  /** Project-relative path (read/edit). */
+  path?: string;
+  /** Search pattern (search). */
+  term?: string;
+  timestamp: string;
+  sessionId: string;
+}
+
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const READ_TOOLS = new Set(['Read']);
+const SEARCH_TOOLS = new Set(['Grep', 'Glob']);
+/** Directories whose files are noise for an architecture map. */
+const IGNORED_SEGMENTS = ['node_modules/', '/.git/', 'dist/', '/.ctxlayer/', 'build/', '.next/'];
+
+interface ToolUseBlock {
+  type?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+}
+
+function toolUseBlocks(content: unknown): ToolUseBlock[] {
+  if (!Array.isArray(content)) return [];
+  return content.filter(
+    (b): b is ToolUseBlock => !!b && typeof b === 'object' && (b as ToolUseBlock).type === 'tool_use',
+  );
+}
+
+/** A search term worth keeping: a symbol-ish token, not a sprawling regex. */
+function cleanSearchTerm(pattern: unknown): string | undefined {
+  if (typeof pattern !== 'string') return undefined;
+  const t = pattern.trim().replace(/^\^|\$$/g, '');
+  // Keep identifier-like queries (function/type/var names); drop regexes with
+  // spaces, alternation, or metacharacters — those aren't "how does X work".
+  if (!/^[\w.$-]{3,60}$/.test(t)) return undefined;
+  return t;
+}
+
+/**
+ * Mine every tool access relevant to a project from ALL Claude Code
+ * transcripts. File reads/edits are attributed by their absolute path — which
+ * project the file physically lives in — so work done from a parent-directory
+ * session still counts. Searches have no path, so they're attributed by the
+ * session's working directory. Cross-session frequency is what makes a file
+ * "load-bearing" — the raw material the codebase-map distiller aggregates.
+ */
+export async function readToolAccesses(
+  projectPath: string,
+  root: string = projectsRoot(),
+): Promise<ToolAccess[]> {
+  const wanted = resolve(projectPath);
+  const adapter = new ClaudeCodeAdapter(root);
+  const projects = await adapter.discover();
+  const accesses: ToolAccess[] = [];
+  const seen = new Set<string>();
+
+  const relInProject = (fp: unknown): string | undefined => {
+    if (typeof fp !== 'string' || !fp) return undefined;
+    const abs = resolve(fp);
+    if (abs !== wanted && !abs.startsWith(wanted + '/')) return undefined; // outside project
+    const rel = relative(wanted, abs);
+    if (IGNORED_SEGMENTS.some((seg) => `/${rel}`.includes(seg))) return undefined;
+    return rel;
+  };
+
+  for (const project of projects) {
+    // Searches (no path) only count when this session's cwd IS the project.
+    const sessionInProject = !!project.path && resolve(project.path) === wanted;
+    const dir = join(root, project.id);
+    let files: string[];
+    try {
+      files = (await readdir(dir)).filter((f) => f.endsWith('.jsonl'));
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      let raw: string;
+      try {
+        raw = await readFile(join(dir, file), 'utf8');
+      } catch {
+        continue;
+      }
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        let entry: TranscriptLine;
+        try {
+          entry = JSON.parse(line) as TranscriptLine;
+        } catch {
+          continue;
+        }
+        if (entry.type !== 'assistant' || entry.isSidechain) continue;
+        const ts = entry.timestamp ?? '';
+        const sessionId = entry.sessionId ?? file;
+        for (const block of toolUseBlocks(entry.message?.content)) {
+          const access = toAccess(block, ts, sessionId, relInProject, sessionInProject);
+          if (!access) continue;
+          // Resumed sessions replay history into new files — dedupe on the
+          // session, not the file, so counts reflect distinct work.
+          const key = `${access.sessionId}:${access.kind}:${access.path ?? access.term}:${ts}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          accesses.push(access);
+        }
+      }
+    }
+  }
+  return accesses;
+}
+
+function toAccess(
+  block: ToolUseBlock,
+  timestamp: string,
+  sessionId: string,
+  relInProject: (fp: unknown) => string | undefined,
+  sessionInProject: boolean,
+): ToolAccess | undefined {
+  const name = block.name ?? '';
+  const input = block.input ?? {};
+  if (READ_TOOLS.has(name)) {
+    const path = relInProject(input.file_path);
+    return path ? { kind: 'read', path, timestamp, sessionId } : undefined;
+  }
+  if (EDIT_TOOLS.has(name)) {
+    const path = relInProject((input as { file_path?: unknown; notebook_path?: unknown }).file_path ?? input.notebook_path);
+    return path ? { kind: 'edit', path, timestamp, sessionId } : undefined;
+  }
+  if (SEARCH_TOOLS.has(name) && sessionInProject) {
+    const term = cleanSearchTerm(input.pattern);
+    return term ? { kind: 'search', term, timestamp, sessionId } : undefined;
+  }
+  return undefined;
 }
 
 function extractRejectionGuidance(resultText: string): string | undefined {

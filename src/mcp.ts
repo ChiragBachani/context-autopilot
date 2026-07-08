@@ -11,6 +11,7 @@ import { discoverAll, observeEverything, observeProject, type ObservedResult } f
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
 import { findStaleReferences } from './stale.js';
+import { applyCodemap, generateCodemap, loadCodemapResult, renderCodemapBlock, saveCodemapResult } from './codemap.js';
 import {
   applyDecisions,
   readExistingContext,
@@ -164,6 +165,36 @@ const TOOLS = [
         project_path: {
           type: 'string',
           description: 'Absolute path of the project. Defaults to the current working directory.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'distill_codebase_map',
+    description:
+      "Build an architecture map of a project from what agents actually navigate — the files they read/edit most across sessions and the symbols they repeatedly grep (i.e. \"how does X work?\"). Returns a concise 'Codebase map' block (key files + where things live) so a future agent starts warm instead of cold-reading the repo. Saves it for review; NOTHING is written to context files until the user approves via apply_codebase_map. Great to offer at the start of work in an unfamiliar repo, or after big structural changes. Can take a minute.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_path: {
+          type: 'string',
+          description: 'Absolute path of the project. Defaults to the current working directory.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'apply_codebase_map',
+    description:
+      "Write the most recently generated codebase map (from distill_codebase_map) into the project's CLAUDE.md and AGENTS.md, in a managed block. Call ONLY after the user has seen the map and approved writing it. Idempotent — re-running replaces the block, never duplicates it, and never touches hand-written content.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_path: {
+          type: 'string',
+          description: 'Absolute project path the map belongs to. Defaults to the current working directory.',
         },
       },
       additionalProperties: false,
@@ -349,6 +380,38 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       renderPickerOptions(proposals),
       `call apply_context_proposals with project_path "${projectPath}" and their exact accept/reject titles.`,
     );
+  }
+  if (name === 'distill_codebase_map') {
+    const projectPath = (args.project_path as string | undefined) ?? process.cwd();
+    const { signals, result } = await generateCodemap(projectPath);
+    if (signals.files.length === 0) {
+      return `No agent navigation found for ${projectPath}. The codebase map is built from this project's Claude Code sessions — there isn't enough session history here yet.`;
+    }
+    if (result.files.length === 0 && result.notes.length === 0) {
+      return 'The distiller produced no coherent map from the available navigation history.';
+    }
+    await saveCodemapResult(projectPath, result);
+    const block = renderCodemapBlock(result);
+    return [
+      `=== CODEBASE MAP (show this to the user; it is generated from real evidence — ${signals.sessionsAnalyzed} session(s), ${signals.accessCount} tool accesses) ===`,
+      block,
+      '=== END CODEBASE MAP ===',
+      '',
+      `This is a proposed managed block for ${projectPath}/CLAUDE.md and AGENTS.md. Show it to the user and ask if they want it saved. Only if they approve, call apply_codebase_map with project_path "${projectPath}". Never write without their explicit go-ahead.`,
+    ].join('\n');
+  }
+  if (name === 'apply_codebase_map') {
+    const projectPath = (args.project_path as string | undefined) ?? process.cwd();
+    const result = await loadCodemapResult(projectPath);
+    if (!result) {
+      throw new Error(`No generated codebase map found for ${projectPath}. Run distill_codebase_map first.`);
+    }
+    const written: string[] = [];
+    for (const target of ['CLAUDE.md', 'AGENTS.md'] as const) {
+      const { path, created } = await applyCodemap(projectPath, target, result);
+      written.push(`${created ? 'created' : 'updated'} ${path}`);
+    }
+    return `Codebase map written: ${written.join('; ')}. The managed block will refresh in place on the next apply.`;
   }
   throw new Error(`Unknown tool: ${name}`);
 }
