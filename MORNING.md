@@ -68,6 +68,17 @@ You asked me to verify the intent — "open the application, it observes, within
 - **Recaps persist** — the dashboard shows the last recap instantly (with its timestamp); the ✨ button regenerates.
 - **Bonus bug the tests caught:** evening data (after 5pm Pacific) was being filed into *tomorrow's* UTC folder and vanishing from "today" — fixed, and tonight's misfiled records migrated back.
 
+## Update 4 — the robustness pass (Activity tab, one-click automation, search, self-healing)
+
+Your feedback: document actions even before they're patterns, with a button to automate them manually; and make the miner read everything. All built:
+
+- **Activity tab** (localhost:4780/#activity): every episode of work, browsable by day — time range, app flow, URLs, what was on screen. **⚡ Automate this** on any episode: AI writes the procedure + trigger and it lands in Automations *enabled*, instantly. Verified on your real day: it turned your 130-minute research block into a 6-step automation (it noticed you googled "what is a daemon" and offered to spare you the search).
+- **The miner now consumes ALL context** — dense activity log merged with OCR captures. There's a test proving a pattern surfaces from the activity log alone, with zero screenshots.
+- **History search**: the box at the top of Activity (plus `ctxlayer search` and the `search_screen_history` MCP tool). Searched "daemon" live: found your exact Google search with the on-screen text.
+- **Automations are fully yours now**: Edit, ＋ New automation (hand-written), Delete — all in the dashboard.
+- **Self-healing**: if the observer dies while observation is on, the menu bar app revives it automatically (verified live: killed the daemon, back in 36s, no click). One macOS reality: revival spawned *by the app* needs the app's Screen Recording grant — one more reason to flip that toggle for "Context Autopilot".
+- Tabs are deep-linkable now (`/#activity`, `/#autos`…).
+
 ## Turn it on for real (the actual product)
 
 Three paste-able commands. After this, you never need the terminal again — the dashboard and notifications are the whole interface.

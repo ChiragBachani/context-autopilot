@@ -20,8 +20,9 @@ import {
   saveProposals,
 } from './propose.js';
 import { recordDistilledSignals } from './state.js';
-import { readAllDays } from './ambient/records.js';
+import { searchHistory } from './ambient/search.js';
 import {
+  allDayMoments,
   applyWorkflowDecisions,
   buildEpisodes,
   distillWorkflows,
@@ -38,14 +39,14 @@ const PROTOCOL_VERSION = '2025-06-18';
 const SERVER_INSTRUCTIONS = `Context Autopilot turns the user's own past sessions into agent context rules, with their approval.
 
 Rules for using these tools:
-- Distill results contain a section marked USER REPORT — include it in your reply to the user unchanged. The evidence quotes in it are the user's own words and are the entire justification for each rule; never drop or paraphrase them.
-- If you collect accept/reject decisions with a structured question / checkbox tool, use the provided PICKER OPTIONS verbatim as the option labels and descriptions (they embed the evidence), and show the USER REPORT in message text first.
-- Never call apply_context_proposals until the user has explicitly stated which proposals to accept or reject.
+- ALWAYS present proposals in your chat message FIRST: distill results contain a section marked USER REPORT — include it in your reply unchanged, as message text, before any decision UI. The evidence quotes in it are the user's own words and are the entire justification for each rule; never drop or paraphrase them. Popups and pickers steal attention — a report shown only alongside a picker is a report the user never reads.
+- Collecting decisions: a plain chat reply ("accept 1 and 3, reject 2") is always sufficient and must always work. You MAY additionally offer a structured question / checkbox tool as a convenience AFTER the report is in your message text — if you do, use the provided PICKER OPTIONS verbatim as labels/descriptions (they embed the evidence). Never make a picker the only way to decide, and never present it before the in-chat report.
+- Never call apply_context_proposals until the user has explicitly stated which proposals to accept or reject (in chat or via the picker).
 - Proactive use: if the user corrects you more than once in a session, or repeats an instruction they've clearly given before, offer (at a natural pause) to run a distill.`;
 
 /** Wraps a distill result so relaying evidence requires zero composition. */
 function distillResultText(report: string, picker: string, applyHint: string): string {
-  return `=== USER REPORT (include in your reply to the user unchanged) ===\n${report}\n=== END USER REPORT ===\n\nPICKER OPTIONS — if you use a structured question/checkbox tool for decisions, use exactly these labels/descriptions:\n${picker}\n\nAfter the user states their decisions, ${applyHint} Never apply without their explicit answer.`;
+  return `=== USER REPORT (REQUIRED: include in your chat reply unchanged, BEFORE any decision UI) ===\n${report}\n=== END USER REPORT ===\n\nDecisions: a plain chat reply from the user always suffices. You may ALSO offer a structured question/checkbox tool after showing the report in text — if so, use exactly these labels/descriptions:\n${picker}\n\nAfter the user states their decisions (chat or picker), ${applyHint} Never apply without their explicit answer, and never let a picker be the only place the proposals appear.`;
 }
 
 const TOOLS = [
@@ -126,6 +127,20 @@ const TOOLS = [
     description:
       "Summarize what the ambient screen observer has captured (macOS, 100% local): observed days, captured moments, and workflow candidates — app/window sequences that recur across multiple days. Model-free and fast. If the user hasn't enabled ambient observation, suggest `ctxlayer observe`.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'search_screen_history',
+    description:
+      'Search everything the ambient observer has seen on the user\'s screen — on-device OCR text, window titles, URLs, and app names — across all observed days, newest first. Use it to answer questions like "what was that error I saw earlier?", "when did I last look at X?", or to recover details the user half-remembers. 100% local; returns matches with timestamps and text snippets.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Text to search for (case-insensitive substring, min 2 chars).' },
+        limit: { type: 'number', description: 'Max matches to return (default 30).' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
   },
   {
     name: 'distill_workflow_proposals',
@@ -266,9 +281,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       .join('\n');
   }
   if (name === 'scan_ambient_activity') {
-    const byDay = readAllDays();
+    // Mine from ALL context (dense activity log + OCR captures), never records alone.
+    const byDay = allDayMoments();
     const episodesByDay = new Map<string, ReturnType<typeof buildEpisodes>>();
-    for (const [day, records] of byDay) episodesByDay.set(day, buildEpisodes(day, records));
+    for (const [day, moments] of byDay) episodesByDay.set(day, buildEpisodes(day, moments));
     const candidates = findWorkflowCandidates(episodesByDay);
     return JSON.stringify(
       {
@@ -284,9 +300,30 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       2,
     );
   }
+  if (name === 'search_screen_history') {
+    const query = String(args.query ?? '');
+    const limit = typeof args.limit === 'number' ? args.limit : 30;
+    const hits = searchHistory(query, { limit });
+    if (hits.length === 0) return `No matches for "${query}" in the observation history.`;
+    return JSON.stringify(
+      {
+        query,
+        matches: hits.map((h) => ({
+          when: `${h.day} ${h.timestamp.slice(11, 16)}`,
+          app: h.app,
+          windowTitle: h.windowTitle,
+          url: h.url,
+          snippet: h.snippet || undefined,
+          matched: h.matched,
+        })),
+      },
+      null,
+      2,
+    );
+  }
   if (name === 'distill_workflow_proposals') {
     const episodesByDay = new Map<string, ReturnType<typeof buildEpisodes>>();
-    for (const [day, records] of readAllDays()) episodesByDay.set(day, buildEpisodes(day, records));
+    for (const [day, moments] of allDayMoments()) episodesByDay.set(day, buildEpisodes(day, moments));
     const candidates = findWorkflowCandidates(episodesByDay);
     if (candidates.length === 0) {
       return 'No repeated workflows found yet — patterns emerge once the ambient observer has seen the same sequence on 2+ days.';

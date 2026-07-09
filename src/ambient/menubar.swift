@@ -79,6 +79,9 @@ func openDashboardURL() {
 
 final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var item: NSStatusItem!
+  /// Self-healing throttle: don't hammer the start script if it keeps failing
+  /// (e.g. permissions revoked) — one attempt per 30s is plenty.
+  var lastReviveAttempt = Date.distantPast
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -92,7 +95,10 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // opening the app should mean observing, with zero extra steps.
     if (readConfig()["enabled"] as? Bool) ?? true { startObserverIfDead() }
     refreshIcon()
-    Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refreshIcon() }
+    Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+      self?.selfHeal()
+      self?.refreshIcon()
+    }
     // Opening the app should SHOW something. Give the dashboard a beat to come
     // up (the daemon may have just been revived), then open it once.
     if userLaunched {
@@ -164,6 +170,17 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     writeConfig { c in c["enabled"] = true; c.removeValue(forKey: "pausedUntil") }
     startObserverIfDead()
     refreshIcon()
+  }
+
+  /// Self-healing: observation is meant to be ON but the daemon's heartbeat is
+  /// stale (crash, force-quit, failed login start) → revive it automatically.
+  /// No human should have to notice a dead observer.
+  func selfHeal() {
+    guard (readConfig()["enabled"] as? Bool) ?? true else { return }
+    guard !observerAlive() else { return }
+    guard Date().timeIntervalSince(lastReviveAttempt) > 30 else { return }
+    lastReviveAttempt = Date()
+    startObserverIfDead()
   }
 
   /// Revive a dead observer via the start script the CLI keeps fresh —

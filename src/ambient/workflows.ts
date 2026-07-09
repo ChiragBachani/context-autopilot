@@ -9,19 +9,78 @@
  * observer watches for trigger matches.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runModel } from '../distill.js';
 import type { AopEntry, AopTrigger, Proposal, ProposalFile } from '../types.js';
 import { browserStepKey } from './browser.js';
 import { ambientRoot, aopsRoot } from './config.js';
-import type { ActivityRecord } from './records.js';
+import { listDays, readDay, readDaySegments, type ActivityRecord } from './records.js';
 
 const EPISODE_GAP_MINUTES = 15;
 const MIN_STEPS = 3;
 const MATCH_THRESHOLD = 0.55;
 const MAX_CANDIDATES = 8;
 const MAX_TEXT_PER_STEP = 110;
+
+// ---------------------------------------------------------------------------
+// Moments — the miner's single source of truth
+//
+// Two observation streams exist: dense activity segments (every stretch of
+// work: app/title/url, no OCR) and sparse screenshot records (rich OCR text,
+// only at intentional moments). Mining from records alone made the Patterns
+// tab blind to most of the day. A "moment" merges both: one chronological
+// stream with full coverage from segments and OCR text attached from the
+// record captured inside the same app/title context. Either file may be
+// missing (demo fixtures are records-only; a fresh install is segments-heavy).
+
+/** Merge one day's segments + screenshot records into a chronological stream. */
+export function buildDayMoments(day: string): ActivityRecord[] {
+  const segments = readDaySegments(day);
+  const records = readDay(day);
+  if (segments.length === 0) return records; // records-only day (e.g. demo)
+
+  // OCR text lookup: record → the segment covering the same app/title/time.
+  const unmatched: ActivityRecord[] = [];
+  const textFor = new Map<number, string>(); // segment index → OCR text
+  for (const record of records) {
+    if (!record.text) continue;
+    const at = Date.parse(record.timestamp);
+    const i = segments.findIndex(
+      (s) =>
+        s.app === record.app &&
+        s.windowTitle === record.windowTitle &&
+        at >= Date.parse(s.start) - 2000 &&
+        at <= Date.parse(s.end) + 2000,
+    );
+    if (i >= 0) {
+      // Keep the longest OCR extract seen inside the segment.
+      if ((textFor.get(i)?.length ?? 0) < record.text.length) textFor.set(i, record.text);
+    } else {
+      unmatched.push(record); // capture outside any segment — keep as its own moment
+    }
+  }
+
+  const moments: ActivityRecord[] = segments.map((s, i) => ({
+    id: `seg-${day}-${i}`,
+    timestamp: s.start,
+    app: s.app,
+    windowTitle: s.windowTitle,
+    trigger: 'dwell',
+    url: s.url,
+    text: textFor.get(i),
+  }));
+  moments.push(...unmatched);
+  moments.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  return moments;
+}
+
+/** Every observed day → merged moments. What ALL mining paths consume. */
+export function allDayMoments(): Map<string, ActivityRecord[]> {
+  const byDay = new Map<string, ActivityRecord[]>();
+  for (const day of listDays()) byDay.set(day, buildDayMoments(day));
+  return byDay;
+}
 
 // ---------------------------------------------------------------------------
 // Episodes
@@ -171,6 +230,24 @@ export async function distillWorkflows(
   return parseWorkflowEntries(raw)
     .filter((entry) => !rejected.has(entry.title.toLowerCase()))
     .map((entry) => ({ entry, targets: [], status: 'pending' as const }));
+}
+
+/**
+ * Distill ONE episode into an AOP entry — the "⚡ Automate this" path. The
+ * user explicitly chose this occurrence, so the distiller must not skip it as
+ * "not a real workflow"; recurrence is not required.
+ */
+export async function distillSingleEpisode(
+  episode: Episode,
+  opts: WorkflowDistillOptions = {},
+): Promise<AopEntry | undefined> {
+  const call = opts.runModel ?? runModel;
+  const candidate: WorkflowCandidate = { id: 'manual', episodes: [episode], days: [episode.day] };
+  const prompt =
+    buildWorkflowPrompt([candidate]) +
+    `\n\nIMPORTANT OVERRIDE: the user explicitly clicked "Automate this" on this exact episode. Do NOT skip it or return [] — write the best possible AOP for it even though it has only been seen once. Confidence should be "medium" (user-confirmed intent).`;
+  const raw = await call(prompt, opts.model);
+  return parseWorkflowEntries(raw)[0];
 }
 
 function buildWorkflowPrompt(candidates: WorkflowCandidate[]): string {
@@ -353,7 +430,8 @@ export interface StoredAop {
   evidence: { quote: string; timestamp: string; sessionId: string }[];
   enabled: boolean;
   createdAt: string;
-  source: 'screen';
+  /** 'screen' = mined from observation; 'manual' = hand-made in the dashboard. */
+  source: 'screen' | 'manual';
 }
 
 export function slugify(title: string): string {
@@ -366,7 +444,7 @@ export function slugify(title: string): string {
   );
 }
 
-export function saveAop(entry: AopEntry): string {
+export function saveAop(entry: AopEntry, source: StoredAop['source'] = 'screen'): string {
   const aop: StoredAop = {
     format: 'aop/v1',
     slug: slugify(entry.title),
@@ -379,13 +457,84 @@ export function saveAop(entry: AopEntry): string {
     evidence: entry.evidence,
     enabled: true,
     createdAt: new Date().toISOString(),
-    source: 'screen',
+    source,
   };
+  writeAop(aop);
+  return join(aopsRoot(), `${aop.slug}.json`);
+}
+
+function writeAop(aop: StoredAop): void {
   mkdirSync(aopsRoot(), { recursive: true });
-  const path = join(aopsRoot(), `${aop.slug}.json`);
-  writeFileSync(path, JSON.stringify(aop, null, 2) + '\n', 'utf8');
+  writeFileSync(join(aopsRoot(), `${aop.slug}.json`), JSON.stringify(aop, null, 2) + '\n', 'utf8');
   writeFileSync(join(aopsRoot(), `${aop.slug}.md`), renderAopMarkdown(aop), 'utf8');
-  return path;
+}
+
+export interface AopPatch {
+  title?: string;
+  rule?: string;
+  procedure?: string[];
+  trigger?: AopTrigger | null; // null clears the live trigger
+}
+
+/**
+ * Edit an existing automation in place. The slug stays stable (it's the live
+ * trigger's identity in ambient state), so a renamed title keeps its history.
+ * The rendered markdown — what an agent receives on "Run it" — is refreshed.
+ */
+export function updateAop(slug: string, patch: AopPatch): StoredAop | undefined {
+  const path = join(aopsRoot(), `${slug}.json`);
+  if (!existsSync(path)) return undefined;
+  const aop = JSON.parse(readFileSync(path, 'utf8')) as StoredAop;
+  if (typeof patch.title === 'string' && patch.title.trim()) aop.title = patch.title.trim();
+  if (typeof patch.rule === 'string') aop.rule = patch.rule.trim();
+  if (Array.isArray(patch.procedure)) {
+    aop.procedure = patch.procedure.map((s) => String(s).trim()).filter(Boolean);
+  }
+  if (patch.trigger === null) aop.trigger = undefined;
+  else if (patch.trigger && typeof patch.trigger.app === 'string' && patch.trigger.app.trim()) {
+    aop.trigger = {
+      app: patch.trigger.app.trim(),
+      titlePattern: patch.trigger.titlePattern?.trim() || undefined,
+      urlPattern: patch.trigger.urlPattern?.trim() || undefined,
+    };
+  }
+  writeAop(aop);
+  return aop;
+}
+
+/** Remove an automation entirely (json + rendered markdown). */
+export function deleteAop(slug: string): boolean {
+  const path = join(aopsRoot(), `${slug}.json`);
+  if (!existsSync(path)) return false;
+  rmSync(path, { force: true });
+  rmSync(join(aopsRoot(), `${slug}.md`), { force: true });
+  return true;
+}
+
+/** Hand-make an automation from scratch (the "+ New automation" button). */
+export function createAop(fields: {
+  title: string;
+  rule?: string;
+  procedure: string[];
+  trigger?: AopTrigger;
+}): StoredAop {
+  const entry: AopEntry = {
+    title: fields.title.trim(),
+    rule: fields.rule?.trim() ?? '',
+    rationale: 'Created by hand in the dashboard.',
+    confidence: 'high', // the user wrote it themselves
+    procedure: fields.procedure.map((s) => s.trim()).filter(Boolean),
+    trigger: fields.trigger?.app?.trim()
+      ? {
+          app: fields.trigger.app.trim(),
+          titlePattern: fields.trigger.titlePattern?.trim() || undefined,
+          urlPattern: fields.trigger.urlPattern?.trim() || undefined,
+        }
+      : undefined,
+    evidence: [],
+  };
+  saveAop(entry, 'manual');
+  return loadAops().find((a) => a.slug === slugify(entry.title))!;
 }
 
 export function loadAops(): StoredAop[] {

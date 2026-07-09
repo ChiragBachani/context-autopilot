@@ -28,17 +28,22 @@ import {
   runObserver,
   uninstallLaunchAgents,
 } from './ambient/observer.js';
-import { dayKey, readAllDays, readDay } from './ambient/records.js';
+import { dayKey, readDay } from './ambient/records.js';
 import { launchMenuBar, menubarBinary } from './ambient/menubar.js';
 import { buildAppBundle, writeDaemonScript } from './ambient/app.js';
 import { generateAndSaveRecap, loadRecap, narrateDay, renderSummaryText, summarizeDayFromDisk } from './ambient/summarize.js';
+import { searchHistory } from './ambient/search.js';
 import {
+  allDayMoments,
   applyWorkflowDecisions,
+  buildDayMoments,
   buildEpisodes,
+  distillSingleEpisode,
   distillWorkflows,
   findWorkflowCandidates,
   loadAops,
   loadWorkflowProposals,
+  saveAop,
   saveWorkflowProposals,
 } from './ambient/workflows.js';
 import { buildSignals } from './cluster.js';
@@ -76,10 +81,15 @@ interface Flags {
   agent?: boolean;
   notify?: boolean;
   narrate?: boolean;
+  /** Positional arguments (e.g. the search query). */
+  args: string[];
+  /** automate-episode selectors. */
+  day?: string;
+  start?: string;
 }
 
 function parseArgs(argv: string[]): { command: string; flags: Flags } {
-  const flags: Flags = { minScore: 4, source: 'all', threshold: 3 };
+  const flags: Flags = { minScore: 4, source: 'all', threshold: 3, args: [] };
   let command = 'help';
   const rest = [...argv];
   if (rest[0] && !rest[0].startsWith('-')) command = rest.shift()!;
@@ -127,6 +137,12 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
       case '--narrate':
         flags.narrate = true;
         break;
+      case '--day':
+        flags.day = rest.shift();
+        break;
+      case '--start':
+        flags.start = rest.shift();
+        break;
       case '--global':
       case '-g':
         flags.global = true;
@@ -156,6 +172,10 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
         command = 'help';
         break;
       default:
+        if (!arg.startsWith('-')) {
+          flags.args.push(arg); // positional (e.g. search terms)
+          break;
+        }
         fail(`Unknown option: ${arg}`);
     }
   }
@@ -652,21 +672,63 @@ async function cmdRecap(flags: Flags): Promise<void> {
   }
 }
 
+/** Search everything the observer has ever seen (OCR text, titles, URLs). */
+async function cmdSearch(flags: Flags): Promise<void> {
+  const query = flags.args.join(' ').trim();
+  if (!query) fail('usage: ctxlayer search <query>');
+  const hits = searchHistory(query);
+  if (flags.json) {
+    console.log(JSON.stringify({ query, hits }, null, 2));
+    return;
+  }
+  if (hits.length === 0) {
+    console.log(`No matches for "${query}" in the observation history.`);
+    return;
+  }
+  console.log(`\n${hits.length} match(es) for "${query}" (newest first):\n`);
+  for (const h of hits) {
+    const when = `${h.day} ${h.timestamp.slice(11, 16)}`;
+    console.log(`  ${when}  [${h.app}]  ${h.windowTitle.slice(0, 70)}`);
+    if (h.snippet) console.log(`      "${h.snippet}"`);
+    else if (h.url) console.log(`      <${h.url}>`);
+  }
+}
+
+/**
+ * Hidden: distill ONE episode into an enabled automation. The dashboard's
+ * "⚡ Automate this" runs this as a child process so the model call never
+ * blocks the daemon's event loop. Prints the created AOP as JSON.
+ */
+async function cmdAutomateEpisode(flags: Flags): Promise<void> {
+  const day = flags.day ?? dayKey();
+  if (!flags.start) fail('automate-episode requires --start <ISO timestamp>');
+  const episodes = buildEpisodes(day, buildDayMoments(day));
+  const episode = episodes.find((e) => e.start === flags.start);
+  if (!episode) fail(`no episode starting at ${flags.start} on ${day}`);
+  const entry = await distillSingleEpisode(episode, { model: flags.model });
+  if (!entry) fail('the distiller could not produce an automation from this episode');
+  saveAop(entry, 'screen');
+  const created = loadAops().find((a) => a.title === entry.title);
+  console.log(JSON.stringify({ created }, null, 2));
+}
+
 function screenCandidates() {
+  // Mine from ALL context: dense activity segments merged with OCR records —
+  // never records alone (allDayMoments is the single mining source).
   const episodesByDay = new Map<string, ReturnType<typeof buildEpisodes>>();
-  for (const [day, records] of readAllDays()) episodesByDay.set(day, buildEpisodes(day, records));
+  for (const [day, moments] of allDayMoments()) episodesByDay.set(day, buildEpisodes(day, moments));
   return findWorkflowCandidates(episodesByDay);
 }
 
 async function cmdScanScreen(flags: Flags): Promise<void> {
-  const byDay = readAllDays();
+  const byDay = allDayMoments();
   const candidates = screenCandidates();
   if (flags.json) {
     console.log(JSON.stringify({ days: byDay.size, candidates }, null, 2));
     return;
   }
   const total = [...byDay.values()].reduce((n, r) => n + r.length, 0);
-  console.log(`\nScanned ${byDay.size} observed day(s), ${total} captured moment(s)`);
+  console.log(`\nScanned ${byDay.size} observed day(s), ${total} moment(s) (activity log + captures)`);
   if (candidates.length === 0) {
     console.log('No repeated workflows detected yet — patterns emerge once the same sequence shows up twice (same day counts).');
     return;
@@ -792,6 +854,7 @@ Ambient (macOS — screen observation, 100% local):
   aop        Review workflow proposals in the terminal; list automations
   summary    Today's work at a glance (time per app, focus, cadence); --narrate for a recap
   recap      Generate + save today's plain-English recap (the dashboard shows it instantly)
+  search     Search everything ever observed (OCR text, titles, URLs) across all days
   menubar    Add the menu bar icon (toggle recording / open dashboard from the top bar)
   app        Install /Applications/Context Autopilot.app — open it and observing just starts
   scan/distill --source screen   mine observed days for repeated workflows
@@ -845,6 +908,10 @@ async function main(): Promise<void> {
       return cmdSummary(flags);
     case 'recap':
       return cmdRecap(flags);
+    case 'search':
+      return cmdSearch(flags);
+    case 'automate-episode':
+      return cmdAutomateEpisode(flags);
     case 'menubar':
     case 'tray':
       return cmdMenubar();

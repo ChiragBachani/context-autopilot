@@ -114,12 +114,16 @@ export function readDay(day: string): ActivityRecord[] {
   return records;
 }
 
-/** Observed days, newest first. */
+/** Observed days, newest first — a day counts if EITHER stream has data. */
 export function listDays(): string[] {
   const root = ambientRoot();
   if (!existsSync(root)) return [];
   return readdirSync(root)
-    .filter((name) => /^\d{4}-\d{2}-\d{2}$/.test(name) && existsSync(join(root, name, 'records.jsonl')))
+    .filter(
+      (name) =>
+        /^\d{4}-\d{2}-\d{2}$/.test(name) &&
+        (existsSync(join(root, name, 'records.jsonl')) || existsSync(join(root, name, 'activity.jsonl'))),
+    )
     .sort()
     .reverse();
 }

@@ -4,11 +4,16 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aopsRoot, DEFAULT_CONFIG } from '../dist/ambient/config.js';
-import { appendRecord, type ActivityRecord } from '../dist/ambient/records.js';
+import { appendRecord, appendSegment, type ActivityRecord, type ActivitySegment } from '../dist/ambient/records.js';
 import { maybeAutoDistill, SegmentTracker } from '../dist/ambient/observer.js';
 import {
+  allDayMoments,
   applyWorkflowDecisions,
+  buildDayMoments,
   buildEpisodes,
+  createAop,
+  deleteAop,
+  distillSingleEpisode,
   distillWorkflows,
   findWorkflowCandidates,
   loadAmbientState,
@@ -18,6 +23,7 @@ import {
   sequenceSimilarity,
   slugify,
   titleKey,
+  updateAop,
   type Episode,
 } from '../dist/ambient/workflows.js';
 
@@ -192,6 +198,60 @@ test('slugify produces filesystem-safe slugs', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Moments — the miner must see ALL context, not just screenshot records
+
+function segment(app: string, title: string, start: string, seconds: number, url?: string): ActivitySegment {
+  const end = new Date(Date.parse(start) + seconds * 1000).toISOString();
+  return { app, windowTitle: title, url, start, end, seconds, activeSeconds: seconds, keys: 0, clicks: 0 };
+}
+
+test('a repeated routine visible ONLY in the activity log becomes a candidate', () => {
+  // Segments only — zero screenshot records on disk. The miner must still see it.
+  const day = '2026-07-09';
+  const routine = (offsetMin: number) => {
+    const at = (m: number) => new Date(Date.parse(`${day}T09:00:00.000Z`) + (offsetMin + m) * 60_000).toISOString();
+    appendSegment(segment('Google Chrome', 'Inbox - Gmail', at(0), 120, 'https://mail.google.com/mail/u/0'));
+    appendSegment(segment('Finder', 'Downloads', at(3), 60));
+    appendSegment(segment('Google Chrome', 'Q3 Tracker - Sheets', at(5), 180, 'https://docs.google.com/spreadsheets/d/AB/edit'));
+  };
+  routine(0);
+  routine(40); // second occurrence, >15 min later → separate episode
+
+  const byDay = allDayMoments();
+  assert.ok(byDay.has(day), 'segments-only day is discovered');
+  const episodesByDay = new Map([[day, buildEpisodes(day, byDay.get(day)!)]]);
+  const candidates = findWorkflowCandidates(episodesByDay);
+  assert.equal(candidates.length, 1, 'the activity-log-only routine surfaces as a pattern candidate');
+  assert.equal(candidates[0].episodes.length, 2);
+});
+
+test('buildDayMoments attaches OCR text from records to the covering segment', () => {
+  const day = '2026-07-09';
+  appendSegment(segment('Cursor', 'notes.md', `${day}T10:00:00.000Z`, 300));
+  appendRecord({
+    id: 'r1',
+    timestamp: `${day}T10:02:00.000Z`, // inside the segment, same app/title
+    app: 'Cursor',
+    windowTitle: 'notes.md',
+    trigger: 'dwell',
+    text: 'launch checklist: post to r/ClaudeAI',
+  });
+  appendRecord({
+    id: 'r2',
+    timestamp: `${day}T11:00:00.000Z`, // no covering segment → kept as its own moment
+    app: 'Preview',
+    windowTitle: 'invoice.pdf',
+    trigger: 'new-page',
+    text: 'INVOICE #42',
+  });
+  const moments = buildDayMoments(day);
+  assert.equal(moments.length, 2, 'one merged segment-moment + one standalone record');
+  assert.equal(moments[0].app, 'Cursor');
+  assert.ok(moments[0].text?.includes('launch checklist'), 'OCR attached to the covering segment');
+  assert.equal(moments[1].app, 'Preview', 'record outside segments survives as its own moment');
+});
+
+// ---------------------------------------------------------------------------
 // Activity segment tracking
 
 test('SegmentTracker closes a segment on context change with active time + cadence', () => {
@@ -228,6 +288,64 @@ test('SegmentTracker counts idle time as inactive and drops sub-flicker segments
   t2.sample({ now: 0, app: 'Finder', title: 'Downloads', idleSeconds: 0, keys: 0, clicks: 0 });
   const flick = t2.sample({ now: 1 * S, app: 'Mail', title: 'Inbox', idleSeconds: 0, keys: 0, clicks: 0 });
   assert.equal(flick, null, 'a 1-second Finder blip is not recorded');
+});
+
+// ---------------------------------------------------------------------------
+// Manual automation: single-episode distill + edit + create
+
+test('distillSingleEpisode turns one episode into an AOP entry (no recurrence needed)', async () => {
+  const episode = buildEpisodes('2026-07-09', morning('2026-07-09'))[0];
+  const fakeModel = async (prompt: string) => {
+    assert.ok(prompt.includes('Automate this'), 'prompt carries the explicit-intent override');
+    assert.ok(prompt.includes('Inbox (14) - Gmail'), 'episode evidence is in the prompt');
+    return JSON.stringify([
+      {
+        title: 'Weekly metrics email',
+        rule: 'Compile the weekly metrics and email the summary.',
+        rationale: 'user-confirmed',
+        confidence: 'medium',
+        procedure: ['Open Gmail', 'Download the export', 'Update the tracker', 'Send the summary'],
+        trigger: { app: 'Google Chrome', urlPattern: 'mail.google.com' },
+        evidence: [],
+      },
+    ]);
+  };
+  const entry = await distillSingleEpisode(episode, { runModel: fakeModel });
+  assert.ok(entry);
+  assert.equal(entry!.title, 'Weekly metrics email');
+  assert.equal(entry!.procedure!.length, 4);
+  assert.equal(entry!.trigger!.urlPattern, 'mail.google.com');
+});
+
+test('createAop and updateAop round-trip; slug stays stable through a rename', () => {
+  const created = createAop({
+    title: 'Send invoices',
+    rule: 'First of the month.',
+    procedure: ['Open the invoices folder', 'Generate PDFs', 'Email them'],
+    trigger: { app: 'Finder', titlePattern: 'Invoices' },
+  });
+  assert.equal(created.source, 'manual');
+  assert.equal(created.slug, 'send-invoices');
+  assert.equal(created.enabled, true);
+
+  const updated = updateAop('send-invoices', {
+    title: 'Send monthly invoices',
+    procedure: ['Open the invoices folder', 'Generate PDFs', 'Email them', 'Log in the tracker'],
+    trigger: null, // clear the live trigger
+  });
+  assert.ok(updated);
+  assert.equal(updated!.slug, 'send-invoices', 'slug is identity — rename does not move the file');
+  assert.equal(updated!.title, 'Send monthly invoices');
+  assert.equal(updated!.procedure.length, 4);
+  assert.equal(updated!.trigger, undefined, 'trigger cleared');
+
+  const reloaded = loadAops().find((a) => a.slug === 'send-invoices');
+  assert.equal(reloaded!.title, 'Send monthly invoices', 'persisted to disk');
+  assert.equal(updateAop('nope', { title: 'x' }), undefined, 'unknown slug → undefined');
+
+  assert.equal(deleteAop('send-invoices'), true, 'delete removes it');
+  assert.equal(loadAops().find((a) => a.slug === 'send-invoices'), undefined);
+  assert.equal(deleteAop('send-invoices'), false, 'double delete → false');
 });
 
 // ---------------------------------------------------------------------------
