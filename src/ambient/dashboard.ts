@@ -330,7 +330,8 @@ export function startDashboard(port?: number): Promise<Server | null> {
 // ---------------------------------------------------------------------------
 // The page (palette matches thecontextlayer.ai)
 
-const PAGE = `<!doctype html>
+/** Exported so tests can syntax-check the embedded script (a parse error = every handler dead). */
+export const PAGE = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -958,8 +959,8 @@ function saveBlocklists(){
 }
 document.getElementById('textonly').addEventListener('change', function(e){
   api('/api/config', {textOnly: e.target.checked}).then(refreshStatus);
-};
-document.getElementById('clipboard').onchange = function(e){
+});
+document.getElementById('clipboard').addEventListener('change', function(e){
   api('/api/config', {clipboard: e.target.checked}).then(refreshStatus);
 });
 
