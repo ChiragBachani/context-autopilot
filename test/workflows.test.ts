@@ -93,6 +93,19 @@ test('a routine seen only once is not a candidate', () => {
   assert.equal(findWorkflowCandidates(byDay).length, 0);
 });
 
+test('a dismissed signature suppresses lookalike candidates, not just exact titles', () => {
+  const byDay = new Map<string, Episode[]>();
+  byDay.set('2026-06-30', buildEpisodes('2026-06-30', morning('2026-06-30')));
+  byDay.set('2026-07-07', buildEpisodes('2026-07-07', morning('2026-07-07', 3)));
+
+  const before = findWorkflowCandidates(byDay, []);
+  assert.equal(before.length, 1);
+
+  const dismissed = [before[0].episodes[0].steps.map((s) => `${s.app.toLowerCase()}::${s.titleKey}`)];
+  const after = findWorkflowCandidates(byDay, dismissed);
+  assert.equal(after.length, 0, 'lookalike of a dismissed pattern does not resurface');
+});
+
 test('the same routine twice in ONE day surfaces on day one', () => {
   // Two occurrences separated by >15 min → two episodes, same day. Users
   // should see results of being observed without waiting for tomorrow.

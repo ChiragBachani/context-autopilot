@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runModel } from '../distill.js';
-import type { AopEntry, AopTrigger, Proposal, ProposalFile } from '../types.js';
+import type { AopEntry, AopTimeWindow, AopTrigger, Proposal, ProposalFile } from '../types.js';
 import { browserStepKey } from './browser.js';
 import { ambientRoot, aopsRoot } from './config.js';
 import { listDays, readDay, readDaySegments, type ActivityRecord } from './records.js';
@@ -160,10 +160,8 @@ export function buildEpisodes(day: string, records: ActivityRecord[]): Episode[]
 // ---------------------------------------------------------------------------
 // Cross-day matching
 
-/** Longest-common-subsequence ratio between two step sequences (0..1). */
-export function sequenceSimilarity(a: WorkflowStep[], b: WorkflowStep[]): number {
-  const ka = a.map(stepKey);
-  const kb = b.map(stepKey);
+/** Longest-common-subsequence ratio between two key sequences (0..1). */
+export function keySequenceSimilarity(ka: string[], kb: string[]): number {
   if (ka.length === 0 || kb.length === 0) return 0;
   const dp: number[][] = Array.from({ length: ka.length + 1 }, () => new Array<number>(kb.length + 1).fill(0));
   for (let i = 1; i <= ka.length; i++) {
@@ -172,6 +170,16 @@ export function sequenceSimilarity(a: WorkflowStep[], b: WorkflowStep[]): number
     }
   }
   return dp[ka.length][kb.length] / Math.max(ka.length, kb.length);
+}
+
+/** Longest-common-subsequence ratio between two step sequences (0..1). */
+export function sequenceSimilarity(a: WorkflowStep[], b: WorkflowStep[]): number {
+  return keySequenceSimilarity(a.map(stepKey), b.map(stepKey));
+}
+
+/** The step-key signature of a candidate (its representative episode). */
+export function candidateSignature(candidate: WorkflowCandidate): string[] {
+  return candidate.episodes[0].steps.map(stepKey);
 }
 
 export interface WorkflowCandidate {
@@ -186,7 +194,10 @@ export interface WorkflowCandidate {
  * same-day repetition surfaces on day one (the distiller rates cross-day
  * recurrence as higher confidence).
  */
-export function findWorkflowCandidates(episodesByDay: Map<string, Episode[]>): WorkflowCandidate[] {
+export function findWorkflowCandidates(
+  episodesByDay: Map<string, Episode[]>,
+  dismissed: string[][] = loadAmbientState().dismissedSignatures,
+): WorkflowCandidate[] {
   const all = [...episodesByDay.values()].flat().filter((e) => e.steps.length >= MIN_STEPS);
   const groups: Episode[][] = [];
   for (const episode of all) {
@@ -204,6 +215,10 @@ export function findWorkflowCandidates(episodesByDay: Map<string, Episode[]>): W
   for (const group of groups) {
     const days = [...new Set(group.map((e) => e.day))].sort();
     if (days.length < 2 && group.length < 2) continue; // a single occurrence is never a pattern
+    // "Not a pattern" teaches: skip groups that look like something the user
+    // already dismissed (not just exact-title matches — lookalikes too).
+    const sig = group[0].steps.map(stepKey);
+    if (dismissed.some((d) => keySequenceSimilarity(sig, d) >= MATCH_THRESHOLD)) continue;
     candidates.push({ id: `wf-${candidates.length}`, episodes: group, days });
   }
   candidates.sort((a, b) => b.days.length - a.days.length || b.episodes.length - a.episodes.length);
@@ -229,7 +244,24 @@ export async function distillWorkflows(
   const rejected = new Set(loadAmbientState().rejectedTitles.map((t) => t.toLowerCase()));
   return parseWorkflowEntries(raw)
     .filter((entry) => !rejected.has(entry.title.toLowerCase()))
-    .map((entry) => ({ entry, targets: [], status: 'pending' as const }));
+    .map((entry) => ({
+      entry,
+      targets: [],
+      status: 'pending' as const,
+      // Carry the source candidate's signature so a rejection can suppress
+      // lookalikes later. Best-match by trigger-app overlap, else the first.
+      signature: candidateSignature(bestCandidateFor(entry, candidates)),
+    }));
+}
+
+/** Pick the candidate an entry most likely came from (trigger app in its steps). */
+function bestCandidateFor(entry: AopEntry, candidates: WorkflowCandidate[]): WorkflowCandidate {
+  const app = entry.trigger?.app?.toLowerCase();
+  if (app) {
+    const hit = candidates.find((c) => c.episodes[0].steps.some((s) => s.app.toLowerCase().includes(app)));
+    if (hit) return hit;
+  }
+  return candidates[0];
 }
 
 /**
@@ -278,7 +310,7 @@ Rules:
 - "title": short human name for the workflow (e.g. "Weekly metrics report").
 - "rule": one sentence describing when/what (imperative).
 - "procedure": 3-8 imperative steps AN AI AGENT would follow to do this work (not a description of what the human did — instructions for doing it). Be concrete: name the apps, files, URLs (use the <…> addresses shown), and actions visible in the evidence.
-- "trigger": {"app": <app name exactly as it appears in the steps>, "titlePattern": <short distinctive window-title fragment>, "urlPattern": <host or host/path of the FIRST step, if it is a web page — e.g. "mail.google.com">} — the moment the workflow STARTS, so a live observer can offer to take over when the person begins it. Prefer urlPattern for web workflows; it is far more precise than a title.
+- "trigger": {"app": <app name exactly as it appears in the steps>, "titlePattern": <short distinctive window-title fragment>, "urlPattern": <host or host/path of the FIRST step, if it is a web page — e.g. "mail.google.com">, "timeWindow": {"weekdays": [<0=Sun…6=Sat of the days the episodes occurred>], "startHour": <local hour, ~90min before the typical start>, "endHour": <local hour, ~90min after>}} — the moment the workflow STARTS. Include timeWindow ONLY if the episodes clearly cluster in time (e.g. all weekday mornings); omit it when they're scattered. Prefer urlPattern for web workflows; it is far more precise than a title.
 - "confidence": "high" if the same sequence appears on 3+ days, "medium" for 2 days, "low" if it only recurred within a single day or the pattern is fuzzy.
 - "rationale": one sentence on why this looks automatable.
 - "evidence": one entry per episode: {"quote": "<day HH:MM–HH:MM: app → app → app>", "timestamp": <episode start ISO>, "sessionId": <day>}.
@@ -288,6 +320,22 @@ Rules:
 ## Observed candidates
 
 ${blocks}`;
+}
+
+function parseTimeWindow(tw: unknown): AopTimeWindow | undefined {
+  if (!tw || typeof tw !== 'object') return undefined;
+  const w = tw as Record<string, unknown>;
+  const startHour = Number(w.startHour);
+  const endHour = Number(w.endHour);
+  if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return undefined;
+  const weekdays = Array.isArray(w.weekdays)
+    ? w.weekdays.map(Number).filter((d) => d >= 0 && d <= 6)
+    : undefined;
+  return {
+    weekdays: weekdays?.length ? [...new Set(weekdays)].sort() : undefined,
+    startHour: Math.min(23, Math.max(0, Math.floor(startHour))),
+    endHour: Math.min(24, Math.max(0, Math.floor(endHour))),
+  };
 }
 
 /** Lenient parse: first JSON array, validating workflow fields. */
@@ -321,6 +369,7 @@ export function parseWorkflowEntries(raw: string): AopEntry[] {
               app: trigger.app,
               titlePattern: typeof trigger.titlePattern === 'string' ? trigger.titlePattern : undefined,
               urlPattern: typeof trigger.urlPattern === 'string' ? trigger.urlPattern : undefined,
+              timeWindow: parseTimeWindow(trigger.timeWindow),
             }
           : undefined,
       evidence: Array.isArray(e.evidence)
@@ -401,6 +450,11 @@ export function applyWorkflowDecisions(acceptTitles: string[], rejectTitles: str
       rejected.push(proposal.entry.title);
       matched.add(title);
       if (!state.rejectedTitles.some((t) => norm(t) === title)) state.rejectedTitles.push(proposal.entry.title);
+      // Teach the miner: remember the shape, so lookalikes stop resurfacing.
+      const sig = proposal.signature;
+      if (sig && sig.length && !state.dismissedSignatures.some((d) => d.join('|') === sig.join('|'))) {
+        state.dismissedSignatures.push(sig);
+      }
     }
   }
   const unmatched = [...acceptSet, ...rejectSet].filter((t) => !matched.has(t));
@@ -622,6 +676,8 @@ export interface AmbientState {
   lastAutoDistillAt?: string;
   /** Day (YYYY-MM-DD) the automatic recap notification last fired. */
   autoRecapDay?: string;
+  /** Step-key sequences of dismissed candidates — suppress lookalikes. */
+  dismissedSignatures: string[][];
 }
 
 function statePath(): string {
@@ -638,9 +694,10 @@ export function loadAmbientState(): AmbientState {
       lastPrompted: raw.lastPrompted ?? {},
       lastAutoDistillAt: raw.lastAutoDistillAt,
       autoRecapDay: raw.autoRecapDay,
+      dismissedSignatures: raw.dismissedSignatures ?? [],
     };
   } catch {
-    return { version: 1, rejectedTitles: [], dontAskSlugs: [], lastPrompted: {} };
+    return { version: 1, rejectedTitles: [], dontAskSlugs: [], lastPrompted: {}, dismissedSignatures: [] };
   }
 }
 

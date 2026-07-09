@@ -23,6 +23,7 @@ import { launchAopInTerminal, observerAlive } from './observer.js';
 import { readRuns, syncAopSchedule } from './runner.js';
 import { searchHistory } from './search.js';
 import { generateAndSaveRecap, loadRecap, summarizeDayFromDisk } from './summarize.js';
+import { generateWeeklyDigest, loadDigest } from './week.js';
 import {
   applyWorkflowDecisions,
   buildDayMoments,
@@ -92,6 +93,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
     if (req.method === 'GET' && path === '/api/recap') {
       return json(res, loadRecap(dayKey()) ?? { narrative: null });
+    }
+    if (req.method === 'GET' && path === '/api/digest') {
+      return json(res, loadDigest(dayKey()) ?? { narrative: null });
+    }
+    if (req.method === 'POST' && path === '/api/digest/generate') {
+      try {
+        return json(res, (await generateWeeklyDigest(dayKey())) ?? { narrative: null });
+      } catch (err) {
+        return json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
+      }
     }
     if (req.method === 'POST' && path === '/api/summary/narrate') {
       try {
@@ -456,6 +467,14 @@ const PAGE = `<!doctype html>
       <div id="summary-body"><div class="empty">Nothing observed yet today.</div></div>
       <div id="narrative" class="narrative" style="display:none"></div>
     </div>
+    <div class="card summary" id="week-card">
+      <div class="summary-head">
+        <h3>This week</h3>
+        <button class="act ghost" id="digest-btn" onclick="genDigest()">📅 Review my week</button>
+      </div>
+      <div id="week-trend" class="muted" style="font-size:13px;margin-bottom:8px"></div>
+      <div id="digest" class="narrative" style="display:none"></div>
+    </div>
     <div class="card"><div id="timeline"><div class="empty">Nothing observed yet today.</div></div></div>
   </section>
 
@@ -626,6 +645,31 @@ function showRecap(r){
 
 function loadRecap(){ api('/api/recap').then(showRecap).catch(function(){}); }
 
+function fmtDur(sec){ var m=Math.round(sec/60); if(m<60)return m+'m'; return Math.floor(m/60)+'h '+(m%60)+'m'; }
+
+function showDigest(d){
+  var box = document.getElementById('digest');
+  var trend = document.getElementById('week-trend');
+  if (d && d.stats){
+    var s=d.stats, cur=s.totalActiveSeconds, prev=s.priorActiveSeconds;
+    var arrow = prev? (cur>=prev?'▲':'▼') : '';
+    var pct = prev? Math.round((cur-prev)/prev*100) : null;
+    trend.innerHTML = 'Active '+fmtDur(cur)+' this week '+(pct!=null?('· '+arrow+' '+Math.abs(pct)+'% vs last week '):'')+'· '+s.automationRuns+' automation run(s)';
+  }
+  if (d && d.narrative){ box.style.display='block'; box.textContent = d.narrative; }
+}
+
+function loadDigest(){ api('/api/digest').then(showDigest).catch(function(){}); }
+
+function genDigest(){
+  var btn=document.getElementById('digest-btn'), box=document.getElementById('digest');
+  btn.disabled=true; btn.textContent='Reviewing…'; box.style.display='block'; box.textContent='Reading your week…';
+  api('/api/digest/generate',{}).then(function(d){
+    if (d.narrative) showDigest(d); else box.textContent = d.error || 'Not enough activity this week yet.';
+    btn.disabled=false; btn.textContent='📅 Review my week';
+  }).catch(function(){ box.textContent='Could not review right now.'; btn.disabled=false; btn.textContent='📅 Review my week'; });
+}
+
 function narrateDay(){
   var btn = document.getElementById('narrate-btn');
   var box = document.getElementById('narrative');
@@ -768,7 +812,10 @@ function aopForm(a){
     + '<div class="triggerrow"><label>Trigger app<input id="af-tapp" value="'+esc(t.app||'')+'" placeholder="Google Chrome"></label>'
     + '<label>Title contains<input id="af-ttitle" value="'+esc(t.titlePattern||'')+'" placeholder="Inbox"></label>'
     + '<label>URL contains<input id="af-turl" value="'+esc(t.urlPattern||'')+'" placeholder="mail.google.com"></label></div>'
-    + '<p class="muted" style="font-size:12.5px">Trigger is optional — when set, Autopilot offers to run this the moment you start the workflow.</p>'
+    + '<div class="triggerrow"><label>Only offer after (hour 0–23)<input id="af-twstart" type="number" min="0" max="23" value="'+(t.timeWindow&&t.timeWindow.startHour!=null?t.timeWindow.startHour:'')+'" placeholder="8"></label>'
+    + '<label>…and before (hour)<input id="af-twend" type="number" min="0" max="24" value="'+(t.timeWindow&&t.timeWindow.endHour!=null?t.timeWindow.endHour:'')+'" placeholder="11"></label>'
+    + '<label>on days<span class="days" id="af-twdays">'+[0,1,2,3,4,5,6].map(function(d){var on=t.timeWindow&&t.timeWindow.weekdays&&t.timeWindow.weekdays.indexOf(d)>=0;return '<label class="daychk"><input type="checkbox" data-twday="'+d+'" '+(on?'checked':'')+'>'+['Su','Mo','Tu','We','Th','Fr','Sa'][d]+'</label>';}).join('')+'</span></label></div>'
+    + '<p class="muted" style="font-size:12.5px">Trigger is optional — when set, Autopilot offers to run this the moment you start the workflow. A time window (optional) means it only offers then — e.g. weekday mornings.</p>'
     + '<div class="schedrow"><label style="flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="af-sched" '+(a&&a.schedule?'checked':'')+' style="width:auto;display:inline"> Run on a schedule</label>'
     + '<input id="af-stime" type="time" value="'+(a&&a.schedule?pad2(a.schedule.hour)+':'+pad2(a.schedule.minute):'09:00')+'" style="width:110px">'
     + '<span class="days">'+[0,1,2,3,4,5,6].map(function(d){var on=a&&a.schedule&&a.schedule.weekdays&&a.schedule.weekdays.indexOf(d)>=0;return '<label class="daychk"><input type="checkbox" data-day="'+d+'" '+(on?'checked':'')+'>'+['Su','Mo','Tu','We','Th','Fr','Sa'][d]+'</label>';}).join('')+'</span></div>'
@@ -793,6 +840,11 @@ function readAopForm(){
     titlePattern: document.getElementById('af-ttitle').value.trim() || undefined,
     urlPattern: document.getElementById('af-turl').value.trim() || undefined
   };
+  var sh = document.getElementById('af-twstart').value, eh = document.getElementById('af-twend').value;
+  if (sh!=='' && eh!==''){
+    var twd=[]; document.querySelectorAll('#af-twdays input:checked').forEach(function(c){ twd.push(Number(c.dataset.twday)); });
+    t.timeWindow = { weekdays: twd, startHour: Number(sh), endHour: Number(eh) };
+  }
   return {
     title: document.getElementById('af-title').value.trim(),
     rule: document.getElementById('af-rule').value.trim(),
@@ -910,7 +962,7 @@ document.getElementById('textonly').addEventListener('change', function(e){
   var btn = document.querySelector('nav button[data-tab="'+t+'"]');
   if (btn) btn.click();
 })();
-refreshStatus(); refreshTimeline(); refreshSummary(); loadRecap();
+refreshStatus(); refreshTimeline(); refreshSummary(); loadRecap(); loadDigest();
 setInterval(refreshStatus, 4000);
 setInterval(refreshTimeline, 4000);
 setInterval(refreshSummary, 8000);

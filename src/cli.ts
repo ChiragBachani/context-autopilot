@@ -35,6 +35,7 @@ import { buildAppBundle, writeDaemonScript } from './ambient/app.js';
 import { generateAndSaveRecap, loadRecap, narrateDay, renderSummaryText, summarizeDayFromDisk } from './ambient/summarize.js';
 import { searchHistory } from './ambient/search.js';
 import { runAop, type RunOrigin } from './ambient/runner.js';
+import { generateWeeklyDigest, loadDigest } from './ambient/week.js';
 import {
   allDayMoments,
   applyWorkflowDecisions,
@@ -685,6 +686,28 @@ async function cmdRecap(flags: Flags): Promise<void> {
   }
 }
 
+/** Generate (or reuse) this week's digest. --notify = quiet nightly path. */
+async function cmdDigest(flags: Flags): Promise<void> {
+  const endDay = dayKey();
+  const existing = !flags.scheduled ? undefined : loadDigest(endDay); // scheduled path won't regen if present
+  if (existing) return;
+  try {
+    const digest = await generateWeeklyDigest(endDay, { model: flags.model });
+    if (!digest) {
+      if (!flags.notify) console.log('Not enough observed activity this week to summarize yet.');
+      return;
+    }
+    if (flags.notify) {
+      notify('Context Autopilot', 'Your week in review is ready — open the app to read it.');
+      return;
+    }
+    console.log(`\nWeek of ${digest.startDay} → ${digest.endDay}\n`);
+    console.log(digest.narrative + '\n');
+  } catch (err) {
+    if (!flags.notify) throw err;
+  }
+}
+
 /** Search everything the observer has ever seen (OCR text, titles, URLs). */
 async function cmdSearch(flags: Flags): Promise<void> {
   const query = flags.args.join(' ').trim();
@@ -953,6 +976,8 @@ async function main(): Promise<void> {
       return cmdRecap(flags);
     case 'search':
       return cmdSearch(flags);
+    case 'digest':
+      return cmdDigest(flags);
     case 'automate-episode':
       return cmdAutomateEpisode(flags);
     case 'run-aop':

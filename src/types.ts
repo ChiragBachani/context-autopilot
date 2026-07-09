@@ -97,6 +97,17 @@ export interface AopTrigger {
   /** URL fragment, case-insensitive (e.g. "mail.google.com"). For web
    * workflows this is far more precise than a window title. */
   urlPattern?: string;
+  /** Only offer during this recurring time window — learned from WHEN the
+   * workflow actually happens ("Monday mornings"), not just what opens it. */
+  timeWindow?: AopTimeWindow;
+}
+
+export interface AopTimeWindow {
+  /** 0 = Sunday … 6 = Saturday. Empty/omitted = any day. */
+  weekdays?: number[];
+  /** Local hours, inclusive start / exclusive end (e.g. 8–11 = 8:00–10:59). */
+  startHour: number;
+  endHour: number;
 }
 
 export interface AopEvidence {
@@ -111,6 +122,9 @@ export interface Proposal {
   entry: AopEntry;
   targets: ProposalTarget[];
   status: 'pending' | 'accepted' | 'rejected';
+  /** Workflow proposals only: source candidate's step-key signature, so a
+   * rejection can suppress lookalike candidates later. */
+  signature?: string[];
 }
 
 export interface ProposalFile {
