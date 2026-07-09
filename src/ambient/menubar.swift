@@ -71,6 +71,12 @@ func alreadyRunning() -> Bool {
   return kill(pid, 0) == 0 // signal 0 just probes existence
 }
 
+func openDashboardURL() {
+  if let url = URL(string: "http://localhost:\(dashboardPort())") {
+    NSWorkspace.shared.open(url)
+  }
+}
+
 final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var item: NSStatusItem!
 
@@ -84,6 +90,11 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if (readConfig()["enabled"] as? Bool) ?? true { startObserverIfDead() }
     refreshIcon()
     Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refreshIcon() }
+    // Opening the app should SHOW something. Give the dashboard a beat to come
+    // up (the daemon may have just been revived), then open it once.
+    if userLaunched {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { openDashboardURL() }
+    }
   }
 
   func refreshIcon() {
@@ -100,6 +111,16 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     image?.isTemplate = true
     button.image = image
     button.contentTintColor = color
+  }
+
+  // The user clicked the app while it's already running (Spotlight/Finder/Dock).
+  // A menu-bar-only app has no window to raise, so "reopening" would do nothing
+  // visible — instead, show the dashboard. This is what makes clicking the app
+  // always do something.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+    startObserverIfDead()
+    openDashboardURL()
+    return true
   }
 
   // Rebuild the menu each time it opens, so labels match the live state.
@@ -173,7 +194,18 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 }
 
-if alreadyRunning() { exit(0) }
+// Distinguish "user opened the app" from "the daemon spawned me in the
+// background". bundleIdentifier is only set when running as the .app bundle
+// executable — so that (or an explicit flag) means show the dashboard; a bare
+// binary spawned by the observer stays quiet and just shows the icon.
+let userLaunched = Bundle.main.bundleIdentifier != nil || CommandLine.arguments.contains("--open-dashboard")
+
+// A second instance (user clicked the app while one's already running) still
+// honors the intent: open the dashboard, then step aside.
+if alreadyRunning() {
+  if userLaunched { openDashboardURL() }
+  exit(0)
+}
 try? FileManager.default.createDirectory(atPath: ambientDir, withIntermediateDirectories: true)
 try? "\(ProcessInfo.processInfo.processIdentifier)".write(toFile: pidPath, atomically: true, encoding: .utf8)
 

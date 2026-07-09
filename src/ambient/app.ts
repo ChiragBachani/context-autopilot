@@ -12,7 +12,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ctxlayerHome, ambientRoot } from './config.js';
@@ -132,7 +132,7 @@ export function buildAppBundle(cliPath: string, applicationsDir = '/Applications
     <key>CFBundleVersion</key><string>0.6.0</string>
     <key>CFBundleShortVersionString</key><string>0.6.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleExecutable</key><string>launcher</string>
+    <key>CFBundleExecutable</key><string>ctxmenubar</string>
 ${hasIcon ? '    <key>CFBundleIconFile</key><string>AppIcon</string>\n' : ''}    <key>LSUIElement</key><true/>
     <key>NSHumanReadableCopyright</key><string>MIT © The Context Layer</string>
   </dict>
@@ -141,17 +141,16 @@ ${hasIcon ? '    <key>CFBundleIconFile</key><string>AppIcon</string>\n' : ''}   
     'utf8',
   );
 
-  const launcher = join(macos, 'launcher');
-  writeFileSync(
-    launcher,
-    `#!/bin/sh
-# Context Autopilot launcher: ensure the observer is running, show the menu bar icon.
-"${daemonScript}"
-exec "${menubar}"
-`,
-    'utf8',
-  );
-  chmodSync(launcher, 0o755);
+  // The bundle executable IS the Swift menu bar binary (not a shell wrapper) —
+  // a script that exec's the binary doesn't reliably establish the AppKit /
+  // window-server connection when launched via LaunchServices, so the status
+  // item never appears. The app starts the observer itself on launch
+  // (startObserverIfDead → daemonScript) and opens the dashboard when it detects
+  // it's running as this bundle.
+  void daemonScript; // kept fresh by writeDaemonScript(); the app invokes it
+  const bundleExec = join(macos, 'ctxmenubar');
+  copyFileSync(menubar, bundleExec);
+  chmodSync(bundleExec, 0o755);
   // Make Spotlight/Finder aware immediately — a fresh unsigned bundle
   // otherwise may not surface in search until the next index sweep.
   registerWithLaunchServices(appPath);
