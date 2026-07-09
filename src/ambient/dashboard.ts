@@ -20,7 +20,7 @@ import {
   screenshotStats,
 } from './records.js';
 import { launchAopInTerminal, observerAlive } from './observer.js';
-import { narrateDay, summarizeDayFromDisk } from './summarize.js';
+import { generateAndSaveRecap, loadRecap, summarizeDayFromDisk } from './summarize.js';
 import { applyWorkflowDecisions, loadAops, loadWorkflowProposals, setAopEnabled } from './workflows.js';
 
 async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -77,10 +77,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (req.method === 'GET' && path === '/api/summary') {
       return json(res, summarizeDayFromDisk(dayKey()));
     }
+    if (req.method === 'GET' && path === '/api/recap') {
+      return json(res, loadRecap(dayKey()) ?? { narrative: null });
+    }
     if (req.method === 'POST' && path === '/api/summary/narrate') {
-      const summary = summarizeDayFromDisk(dayKey());
       try {
-        return json(res, { narrative: await narrateDay(summary) });
+        const recap = await generateAndSaveRecap(dayKey());
+        return json(res, recap ?? { narrative: null });
       } catch (err) {
         return json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
       }
@@ -454,13 +457,24 @@ function refreshSummary(){
   }).catch(function(){});
 }
 
+function showRecap(r){
+  var box = document.getElementById('narrative');
+  if (!r || !r.narrative) return;
+  var when = r.generatedAt ? new Date(r.generatedAt) : null;
+  var stamp = when ? ' <span class="muted" style="font-size:12px">(as of '+when.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})+')</span>' : '';
+  box.style.display = 'block';
+  box.innerHTML = esc(r.narrative) + stamp;
+}
+
+function loadRecap(){ api('/api/recap').then(showRecap).catch(function(){}); }
+
 function narrateDay(){
   var btn = document.getElementById('narrate-btn');
   var box = document.getElementById('narrative');
   btn.disabled = true; btn.textContent = 'Thinking…';
   box.style.display = 'block'; box.textContent = 'Reading your day…';
   api('/api/summary/narrate', {}).then(function(r){
-    box.textContent = r.narrative || r.error || 'Could not summarize right now.';
+    if (r.narrative) showRecap(r); else box.textContent = r.error || 'Could not summarize right now.';
     btn.disabled = false; btn.textContent = '✨ Summarize my day';
   }).catch(function(){ box.textContent = 'Could not summarize right now.'; btn.disabled = false; btn.textContent = '✨ Summarize my day'; });
 }
@@ -554,7 +568,7 @@ document.getElementById('textonly').addEventListener('change', function(e){
   api('/api/config', {textOnly: e.target.checked}).then(refreshStatus);
 });
 
-refreshStatus(); refreshTimeline(); refreshSummary();
+refreshStatus(); refreshTimeline(); refreshSummary(); loadRecap();
 setInterval(refreshStatus, 4000);
 setInterval(refreshTimeline, 4000);
 setInterval(refreshSummary, 8000);

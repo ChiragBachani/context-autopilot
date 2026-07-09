@@ -79,6 +79,9 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let menu = NSMenu()
     menu.delegate = self
     item.menu = menu
+    // If observation is meant to be on but no daemon is alive, revive it —
+    // opening the app should mean observing, with zero extra steps.
+    if (readConfig()["enabled"] as? Bool) ?? true { startObserverIfDead() }
     refreshIcon()
     Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refreshIcon() }
   }
@@ -134,7 +137,21 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc func turnOn() {
     writeConfig { c in c["enabled"] = true; c.removeValue(forKey: "pausedUntil") }
+    startObserverIfDead()
     refreshIcon()
+  }
+
+  /// Revive a dead observer via the start script the CLI keeps fresh —
+  /// so the menu bar toggle genuinely means "observing", not just a config bit.
+  func startObserverIfDead() {
+    if observerAlive() { return }
+    let script = home + "/bin/start-observer.sh"
+    guard FileManager.default.isExecutableFile(atPath: script) else { return }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: script)
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try? p.run()
   }
   @objc func turnOff() {
     writeConfig { c in c["enabled"] = false }

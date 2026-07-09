@@ -121,11 +121,17 @@ The approval loop closes entirely inside chat: distill tools return each proposa
 Coding transcripts are chapter one. `ctxlayer observe` is chapter two: it watches how you *work* — not just how you prompt — and turns repeated manual workflows into automations you approve.
 
 ```
+$ ctxlayer app               # install /Applications/Context Autopilot.app — then just open it:
+                             # observing starts, the eye appears in your menu bar, done.
 $ ctxlayer observe --demo    # see the whole pipeline on synthetic data, zero permissions
-$ ctxlayer observe           # the real thing (walks you through the two macOS permission toggles)
+$ ctxlayer observe           # terminal flavor of the same thing
 $ ctxlayer observe --install # background at login (mining runs on its own as you work)
 $ ctxlayer summary           # today at a glance: time per app, focus, cadence (--narrate for a recap)
-$ ctxlayer menubar           # add a top-bar icon to toggle recording / open the dashboard
+```
+
+**The first hours, unprompted:** the summary card fills in live; patterns are mined every couple of hours (same-day repetition counts); and once ~3 hours of active work have been observed, Autopilot generates your day recap on its own and notifies you — you don't have to know where to look. The only setup macOS requires is one Screen Recording + Accessibility grant on first launch (it opens the exact Settings pane for you).
+
+```
 ```
 
 How it works:

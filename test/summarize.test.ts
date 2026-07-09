@@ -1,7 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDayEvidence, summarizeDay } from '../dist/ambient/summarize.js';
+import { beforeEach } from 'node:test';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildDayEvidence, loadRecap, saveRecap, summarizeDay } from '../dist/ambient/summarize.js';
+import { shouldAutoRecap } from '../dist/ambient/observer.js';
 import type { ActivityRecord, ActivitySegment } from '../dist/ambient/records.js';
+
+beforeEach(() => {
+  process.env.CTXLAYER_HOME = mkdtempSync(join(tmpdir(), 'ctxlayer-sum-'));
+});
 
 function seg(app: string, title: string, start: string, seconds: number, activeSeconds: number, extra: Partial<ActivitySegment> = {}): ActivitySegment {
   const end = new Date(Date.parse(start) + seconds * 1000).toISOString();
@@ -68,6 +77,27 @@ test('buildDayEvidence interleaves segments and OCR digests chronologically', ()
   assert.ok(lines[1].includes('reddit.com/r/ClaudeAI'), 'URL carried into evidence');
   assert.ok(lines[1].includes('typing (500 keys)'), 'typing cadence surfaces');
   assert.ok(lines[2].includes('screen showed: "Launching Context Autopilot'), 'OCR text lands in the log');
+});
+
+test('recaps persist: save → load round-trip, absent day → undefined', () => {
+  assert.equal(loadRecap('2026-07-08'), undefined, 'nothing saved yet');
+  const saved = saveRecap('2026-07-08', 'You shipped the ambient observer.', new Date('2026-07-08T21:00:00Z'));
+  const loaded = loadRecap('2026-07-08');
+  assert.deepEqual(loaded, saved);
+  assert.equal(loaded!.narrative, 'You shipped the ambient observer.');
+  assert.equal(loadRecap('2026-07-09'), undefined, 'other days untouched');
+});
+
+test('the automatic first-win recap fires once per day, after real work', () => {
+  const HOURS = 3600;
+  // Not enough observed work yet → stay quiet.
+  assert.equal(shouldAutoRecap(undefined, '2026-07-08', 2 * HOURS), false);
+  // Threshold crossed → fire.
+  assert.equal(shouldAutoRecap(undefined, '2026-07-08', 3 * HOURS), true);
+  // Already fired today → never again today, no matter how much more work.
+  assert.equal(shouldAutoRecap('2026-07-08', '2026-07-08', 9 * HOURS), false);
+  // A new day resets it.
+  assert.equal(shouldAutoRecap('2026-07-08', '2026-07-09', 4 * HOURS), true);
 });
 
 test('summarizeDay on an empty day is well-formed and zeroed', () => {

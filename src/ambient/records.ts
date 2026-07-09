@@ -53,7 +53,9 @@ export interface ActivitySegment {
 }
 
 export function appendSegment(segment: ActivitySegment): void {
-  const day = segment.start.slice(0, 10);
+  // Bucket by LOCAL day — readers use dayKey(), and an evening's work must
+  // land in "today", not tomorrow's UTC date.
+  const day = dayKey(new Date(segment.start));
   const dir = dayDir(day);
   mkdirSync(dir, { recursive: true });
   appendFileSync(join(dir, 'activity.jsonl'), JSON.stringify(segment) + '\n', 'utf8');
@@ -87,7 +89,10 @@ export function dayDir(day: string): string {
 }
 
 export function appendRecord(record: ActivityRecord): void {
-  const day = record.timestamp.slice(0, 10);
+  // Bucket by LOCAL day (see appendSegment) — before this, records written
+  // after 5pm Pacific landed in tomorrow's UTC folder and vanished from
+  // "today" everywhere.
+  const day = dayKey(new Date(record.timestamp));
   const dir = dayDir(day);
   mkdirSync(dir, { recursive: true });
   appendFileSync(join(dir, 'records.jsonl'), JSON.stringify(record) + '\n', 'utf8');

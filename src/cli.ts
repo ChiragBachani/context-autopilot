@@ -30,7 +30,8 @@ import {
 } from './ambient/observer.js';
 import { dayKey, readAllDays, readDay } from './ambient/records.js';
 import { launchMenuBar, menubarBinary } from './ambient/menubar.js';
-import { narrateDay, renderSummaryText, summarizeDayFromDisk } from './ambient/summarize.js';
+import { buildAppBundle, writeDaemonScript } from './ambient/app.js';
+import { generateAndSaveRecap, loadRecap, narrateDay, renderSummaryText, summarizeDayFromDisk } from './ambient/summarize.js';
 import {
   applyWorkflowDecisions,
   buildEpisodes,
@@ -524,6 +525,8 @@ async function cmdObserve(flags: Flags): Promise<void> {
   if (!started) process.exit(1);
   const server = await startDashboard();
   const port = loadConfig().dashboardPort;
+  // Keep the revive script fresh so the menu bar app can restart a dead daemon.
+  writeDaemonScript(cliPath());
   // Bring up the menu bar app so observation state is glanceable in the top bar
   // (idempotent — the app's pid lock makes a duplicate launch a no-op).
   launchMenuBar();
@@ -532,6 +535,17 @@ async function cmdObserve(flags: Flags): Promise<void> {
     console.log(`dashboard open at http://localhost:${port} — leave this running; Ctrl-C stops observing.`);
     console.log('menu bar icon added — click it to toggle recording or open the dashboard.');
   }
+}
+
+/** Build /Applications/Context Autopilot.app — the double-click entry point. */
+async function cmdApp(): Promise<void> {
+  const result = buildAppBundle(cliPath());
+  if (!result) {
+    fail('Could not build the app (needs the swiftc that ships with Xcode Command Line Tools).');
+  }
+  console.log(`${result.created ? 'Installed' : 'Updated'} ${result.appPath}`);
+  console.log('Open it like any app (Spotlight: "Context Autopilot") — it starts observing and puts the eye in your menu bar.');
+  console.log('First launch may ask for Screen Recording permission; flip the toggle once and reopen.');
 }
 
 async function cmdMenubar(): Promise<void> {
@@ -612,6 +626,29 @@ async function cmdSummary(flags: Flags): Promise<void> {
     console.log('  ' + (await narrateDay(summary, { model: flags.model })).replace(/\n/g, '\n  '));
   } else {
     console.log('\nAdd --narrate for a plain-English recap of your day.');
+  }
+}
+
+/**
+ * Generate + persist today's recap. `--notify` is the observer's first-win
+ * path: quiet, fire a notification only when a recap was actually produced.
+ */
+async function cmdRecap(flags: Flags): Promise<void> {
+  const day = dayKey();
+  try {
+    const recap = await generateAndSaveRecap(day, { model: flags.model });
+    if (!recap) {
+      if (!flags.notify) console.log('Nothing observed yet today — no recap to write.');
+      return;
+    }
+    if (flags.notify) {
+      notify('Context Autopilot', 'Your day so far, summarized — open the dashboard to read it.');
+      return;
+    }
+    console.log('\n' + recap.narrative + '\n');
+    console.log(`(saved — the dashboard shows this instantly now; generated ${recap.generatedAt.slice(11, 16)} UTC)`);
+  } catch (err) {
+    if (!flags.notify) throw err; // background path must never crash loudly
   }
 }
 
@@ -754,7 +791,9 @@ Ambient (macOS — screen observation, 100% local):
   journal    Alias for dashboard
   aop        Review workflow proposals in the terminal; list automations
   summary    Today's work at a glance (time per app, focus, cadence); --narrate for a recap
+  recap      Generate + save today's plain-English recap (the dashboard shows it instantly)
   menubar    Add the menu bar icon (toggle recording / open dashboard from the top bar)
+  app        Install /Applications/Context Autopilot.app — open it and observing just starts
   scan/distill --source screen   mine observed days for repeated workflows
 
 Options:
@@ -804,9 +843,13 @@ async function main(): Promise<void> {
       return cmdAop(flags);
     case 'summary':
       return cmdSummary(flags);
+    case 'recap':
+      return cmdRecap(flags);
     case 'menubar':
     case 'tray':
       return cmdMenubar();
+    case 'app':
+      return cmdApp();
     default:
       return help();
   }

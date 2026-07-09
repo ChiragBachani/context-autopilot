@@ -6,9 +6,11 @@
  * model narrative turns them into a plain-English recap.
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { runModel } from '../distill.js';
 import { hostOf } from './browser.js';
-import { readDay, readDaySegments, type ActivityRecord, type ActivitySegment } from './records.js';
+import { dayDir, readDay, readDaySegments, type ActivityRecord, type ActivitySegment } from './records.js';
 
 export interface AppUsage {
   app: string;
@@ -142,6 +144,45 @@ export function renderSummaryText(s: DaySummary): string {
 export interface NarrateOptions {
   model?: string;
   runModel?: (prompt: string, model?: string) => Promise<string>;
+}
+
+// ---------------------------------------------------------------------------
+// Recap persistence — generate once, show instantly ever after
+
+export interface StoredRecap {
+  day: string;
+  generatedAt: string;
+  narrative: string;
+}
+
+function recapPath(day: string): string {
+  return join(dayDir(day), 'recap.json');
+}
+
+export function saveRecap(day: string, narrative: string, now: Date = new Date()): StoredRecap {
+  const recap: StoredRecap = { day, generatedAt: now.toISOString(), narrative };
+  mkdirSync(dayDir(day), { recursive: true });
+  writeFileSync(recapPath(day), JSON.stringify(recap, null, 2) + '\n', 'utf8');
+  return recap;
+}
+
+export function loadRecap(day: string): StoredRecap | undefined {
+  if (!existsSync(recapPath(day))) return undefined;
+  try {
+    const recap = JSON.parse(readFileSync(recapPath(day), 'utf8')) as StoredRecap;
+    return typeof recap.narrative === 'string' && recap.narrative ? recap : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Generate the day's recap and persist it (the one path everything shares). */
+export async function generateAndSaveRecap(day: string, opts: NarrateOptions = {}): Promise<StoredRecap | undefined> {
+  const summary = summarizeDayFromDisk(day);
+  if (summary.segmentCount === 0) return undefined;
+  const narrative = await narrateDay(summary, opts);
+  if (!narrative) return undefined;
+  return saveRecap(day, narrative);
 }
 
 /** Keep the evidence log inside a sane prompt budget. */

@@ -448,6 +448,8 @@ export interface AmbientState {
   lastPrompted: Record<string, string>;
   /** ISO timestamp of the last periodic auto-distill run. */
   lastAutoDistillAt?: string;
+  /** Day (YYYY-MM-DD) the automatic recap notification last fired. */
+  autoRecapDay?: string;
 }
 
 function statePath(): string {
@@ -463,6 +465,7 @@ export function loadAmbientState(): AmbientState {
       dontAskSlugs: raw.dontAskSlugs ?? [],
       lastPrompted: raw.lastPrompted ?? {},
       lastAutoDistillAt: raw.lastAutoDistillAt,
+      autoRecapDay: raw.autoRecapDay,
     };
   } catch {
     return { version: 1, rejectedTitles: [], dontAskSlugs: [], lastPrompted: {} };

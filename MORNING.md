@@ -58,6 +58,16 @@ It's the same evidence-based, approve-first, staleness-checked philosophy as the
 
 ---
 
+## Update 3 — it's a real app now (the seamless-intent pass)
+
+You asked me to verify the intent — "open the application, it observes, within 5 hours it's useful" — is actually met. It wasn't, so I closed the gaps:
+
+- **`/Applications/Context Autopilot.app` exists on your Mac right now.** Open it like any app (Spotlight → "Context Autopilot"): it starts the observer and puts the eye in your menu bar. No terminal. One macOS catch on first open: the app is a new identity to macOS, so grant it **Screen Recording + Accessibility** once (it opens the right Settings pane and notifies you), then click the menu bar eye → *Turn observation on*.
+- **The menu bar toggle now actually starts the observer** if it's dead — before, it only flipped a config bit.
+- **The first-win moment:** after ~3 hours of observed active work in a day, Autopilot generates your recap *unprompted* and notifies you. Usefulness announces itself.
+- **Recaps persist** — the dashboard shows the last recap instantly (with its timestamp); the ✨ button regenerates.
+- **Bonus bug the tests caught:** evening data (after 5pm Pacific) was being filed into *tomorrow's* UTC folder and vanishing from "today" — fixed, and tonight's misfiled records migrated back.
+
 ## Turn it on for real (the actual product)
 
 Three paste-able commands. After this, you never need the terminal again — the dashboard and notifications are the whole interface.
