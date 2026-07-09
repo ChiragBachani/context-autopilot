@@ -11,6 +11,7 @@ import { discoverAll, observeEverything, observeProject, type ObservedResult } f
 import { buildSignals } from './cluster.js';
 import { distill } from './distill.js';
 import { findStaleReferences } from './stale.js';
+import { applyCodemap, generateCodemap, loadCodemapResult, renderCodemapBlock, saveCodemapResult } from './codemap.js';
 import {
   applyDecisions,
   readExistingContext,
@@ -19,23 +20,33 @@ import {
   saveProposals,
 } from './propose.js';
 import { recordDistilledSignals } from './state.js';
+import { searchHistory } from './ambient/search.js';
+import {
+  allDayMoments,
+  applyWorkflowDecisions,
+  buildEpisodes,
+  distillWorkflows,
+  findWorkflowCandidates,
+  loadAops,
+  saveWorkflowProposals,
+} from './ambient/workflows.js';
 import type { ProposalFile } from './types.js';
 
-const SERVER = { name: 'context-autopilot', version: '0.5.0' };
+const SERVER = { name: 'context-autopilot', version: '0.6.0' };
 const PROTOCOL_VERSION = '2025-06-18';
 
 /** Loaded into the agent's context at session start via initialize.instructions. */
 const SERVER_INSTRUCTIONS = `Context Autopilot turns the user's own past sessions into agent context rules, with their approval.
 
 Rules for using these tools:
-- Distill results contain a section marked USER REPORT — include it in your reply to the user unchanged. The evidence quotes in it are the user's own words and are the entire justification for each rule; never drop or paraphrase them.
-- If you collect accept/reject decisions with a structured question / checkbox tool, use the provided PICKER OPTIONS verbatim as the option labels and descriptions (they embed the evidence), and show the USER REPORT in message text first.
-- Never call apply_context_proposals until the user has explicitly stated which proposals to accept or reject.
+- ALWAYS present proposals in your chat message FIRST: distill results contain a section marked USER REPORT — include it in your reply unchanged, as message text, before any decision UI. The evidence quotes in it are the user's own words and are the entire justification for each rule; never drop or paraphrase them. Popups and pickers steal attention — a report shown only alongside a picker is a report the user never reads.
+- Collecting decisions: a plain chat reply ("accept 1 and 3, reject 2") is always sufficient and must always work. You MAY additionally offer a structured question / checkbox tool as a convenience AFTER the report is in your message text — if you do, use the provided PICKER OPTIONS verbatim as labels/descriptions (they embed the evidence). Never make a picker the only way to decide, and never present it before the in-chat report.
+- Never call apply_context_proposals until the user has explicitly stated which proposals to accept or reject (in chat or via the picker).
 - Proactive use: if the user corrects you more than once in a session, or repeats an instruction they've clearly given before, offer (at a natural pause) to run a distill.`;
 
 /** Wraps a distill result so relaying evidence requires zero composition. */
 function distillResultText(report: string, picker: string, applyHint: string): string {
-  return `=== USER REPORT (include in your reply to the user unchanged) ===\n${report}\n=== END USER REPORT ===\n\nPICKER OPTIONS — if you use a structured question/checkbox tool for decisions, use exactly these labels/descriptions:\n${picker}\n\nAfter the user states their decisions, ${applyHint} Never apply without their explicit answer.`;
+  return `=== USER REPORT (REQUIRED: include in your chat reply unchanged, BEFORE any decision UI) ===\n${report}\n=== END USER REPORT ===\n\nDecisions: a plain chat reply from the user always suffices. You may ALSO offer a structured question/checkbox tool after showing the report in text — if so, use exactly these labels/descriptions:\n${picker}\n\nAfter the user states their decisions (chat or picker), ${applyHint} Never apply without their explicit answer, and never let a picker be the only place the proposals appear.`;
 }
 
 const TOOLS = [
@@ -112,6 +123,54 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'scan_ambient_activity',
+    description:
+      "Summarize what the ambient screen observer has captured (macOS, 100% local): observed days, captured moments, and workflow candidates — app/window sequences that recur across multiple days. Model-free and fast. If the user hasn't enabled ambient observation, suggest `ctxlayer observe`.",
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'search_screen_history',
+    description:
+      'Search everything the ambient observer has seen on the user\'s screen — on-device OCR text, window titles, URLs, and app names — across all observed days, newest first. Use it to answer questions like "what was that error I saw earlier?", "when did I last look at X?", or to recover details the user half-remembers. 100% local; returns matches with timestamps and text snippets.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Text to search for (case-insensitive substring, min 2 chars).' },
+        limit: { type: 'number', description: 'Max matches to return (default 30).' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'distill_workflow_proposals',
+    description:
+      'Mine the ambient screen observations for workflows that recur across days and distill them into Agent Operating Procedure proposals (trigger + step-by-step procedure + evidence). Proposals are saved for review; NOTHING is automated until the user approves via approve_aop. Can take a minute.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'approve_aop',
+    description:
+      "Apply the user's explicit decisions on pending workflow (AOP) proposals. Call ONLY after the user has said in conversation which workflows to automate — never decide for them. Accepted workflows become Agent Operating Procedures the live observer offers to run; rejected ones are remembered and never re-proposed.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        accept_titles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Titles of workflow proposals the user accepted (may be empty).',
+        },
+        reject_titles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Titles of workflow proposals the user rejected.',
+        },
+      },
+      required: ['accept_titles'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'distill_context_proposals',
     description:
       'Run the full Context Autopilot pipeline: scan session history, then distill the signals into evidence-backed CLAUDE.md/AGENTS.md proposals. Proposals are saved for review; NOTHING is written to context files until the user approves via apply_context_proposals. Can take a minute. Good moments to proactively suggest this: after the user corrects you repeatedly, or at the natural end of a substantial working session — ask first, then run.',
@@ -121,6 +180,36 @@ const TOOLS = [
         project_path: {
           type: 'string',
           description: 'Absolute path of the project. Defaults to the current working directory.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'distill_codebase_map',
+    description:
+      "Build an architecture map of a project from what agents actually navigate — the files they read/edit most across sessions and the symbols they repeatedly grep (i.e. \"how does X work?\"). Returns a concise 'Codebase map' block (key files + where things live) so a future agent starts warm instead of cold-reading the repo. Saves it for review; NOTHING is written to context files until the user approves via apply_codebase_map. Great to offer at the start of work in an unfamiliar repo, or after big structural changes. Can take a minute.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_path: {
+          type: 'string',
+          description: 'Absolute path of the project. Defaults to the current working directory.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'apply_codebase_map',
+    description:
+      "Write the most recently generated codebase map (from distill_codebase_map) into the project's CLAUDE.md and AGENTS.md, in a managed block. Call ONLY after the user has seen the map and approved writing it. Idempotent — re-running replaces the block, never duplicates it, and never touches hand-written content.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_path: {
+          type: 'string',
+          description: 'Absolute project path the map belongs to. Defaults to the current working directory.',
         },
       },
       additionalProperties: false,
@@ -191,6 +280,94 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       .filter(Boolean)
       .join('\n');
   }
+  if (name === 'scan_ambient_activity') {
+    // Mine from ALL context (dense activity log + OCR captures), never records alone.
+    const byDay = allDayMoments();
+    const episodesByDay = new Map<string, ReturnType<typeof buildEpisodes>>();
+    for (const [day, moments] of byDay) episodesByDay.set(day, buildEpisodes(day, moments));
+    const candidates = findWorkflowCandidates(episodesByDay);
+    return JSON.stringify(
+      {
+        observedDays: byDay.size,
+        capturedMoments: [...byDay.values()].reduce((n, r) => n + r.length, 0),
+        automations: loadAops().map((a) => ({ title: a.title, enabled: a.enabled })),
+        workflowCandidates: candidates.map((c) => ({
+          recurredOnDays: c.days,
+          steps: c.episodes[0].steps.map((s) => `[${s.app}] ${s.title}`),
+        })),
+      },
+      null,
+      2,
+    );
+  }
+  if (name === 'search_screen_history') {
+    const query = String(args.query ?? '');
+    const limit = typeof args.limit === 'number' ? args.limit : 30;
+    const hits = searchHistory(query, { limit });
+    if (hits.length === 0) return `No matches for "${query}" in the observation history.`;
+    return JSON.stringify(
+      {
+        query,
+        matches: hits.map((h) => ({
+          when: `${h.day} ${h.timestamp.slice(11, 16)}`,
+          app: h.app,
+          windowTitle: h.windowTitle,
+          url: h.url,
+          snippet: h.snippet || undefined,
+          matched: h.matched,
+        })),
+      },
+      null,
+      2,
+    );
+  }
+  if (name === 'distill_workflow_proposals') {
+    const episodesByDay = new Map<string, ReturnType<typeof buildEpisodes>>();
+    for (const [day, moments] of allDayMoments()) episodesByDay.set(day, buildEpisodes(day, moments));
+    const candidates = findWorkflowCandidates(episodesByDay);
+    if (candidates.length === 0) {
+      return 'No repeated workflows found yet — patterns emerge once the ambient observer has seen the same sequence on 2+ days.';
+    }
+    const proposals = await distillWorkflows(candidates);
+    if (proposals.length === 0) return 'The distiller found no coherent, automatable workflows to propose.';
+    saveWorkflowProposals(proposals);
+    const report = proposals
+      .map((p, i) => {
+        const e = p.entry;
+        const steps = (e.procedure ?? []).map((s) => `   · ${s}`).join('\n');
+        const evidence = e.evidence.slice(0, 3).map((ev) => `> ${ev.quote}`).join('\n');
+        return `**${i + 1}. ${e.title}** _(${e.confidence} confidence)_\n${e.rule}\n${steps}\n${evidence}`;
+      })
+      .join('\n\n');
+    const picker = proposals
+      .map((p, i) => {
+        const ev = p.entry.evidence[0];
+        return `${i + 1}. label: "${p.entry.title}" — description: "${p.entry.confidence}${ev ? ` · seen: ${ev.quote.slice(0, 80)}` : ''}"`;
+      })
+      .join('\n');
+    return distillResultText(
+      `## Workflows Autopilot noticed you doing by hand — automate any of these?\n\n${report}\n\nNothing is automated until you decide. Reply with your choices (e.g. "automate 1, skip 2").`,
+      picker,
+      'call approve_aop with their exact accept/reject titles.',
+    );
+  }
+  if (name === 'approve_aop') {
+    const result = applyWorkflowDecisions(
+      (args.accept_titles as string[]) ?? [],
+      (args.reject_titles as string[]) ?? [],
+    );
+    return [
+      `Automated: ${result.accepted.length ? result.accepted.join(', ') : 'none'}.`,
+      `Rejected: ${result.rejected.length ? result.rejected.join(', ') : 'none'}.`,
+      result.unmatched.length ? `WARNING — no pending proposal matched: ${result.unmatched.join(', ')}.` : '',
+      result.accepted.length
+        ? 'The live observer will now offer to run these when the user starts the workflow.'
+        : '',
+      `${result.stillPending} proposal(s) still pending.`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
   if (name === 'distill_global_context') {
     const rootPath = join(homedir(), '.claude');
     const observations = await observeEverything();
@@ -240,6 +417,38 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       renderPickerOptions(proposals),
       `call apply_context_proposals with project_path "${projectPath}" and their exact accept/reject titles.`,
     );
+  }
+  if (name === 'distill_codebase_map') {
+    const projectPath = (args.project_path as string | undefined) ?? process.cwd();
+    const { signals, result } = await generateCodemap(projectPath);
+    if (signals.files.length === 0) {
+      return `No agent navigation found for ${projectPath}. The codebase map is built from this project's Claude Code sessions — there isn't enough session history here yet.`;
+    }
+    if (result.files.length === 0 && result.notes.length === 0) {
+      return 'The distiller produced no coherent map from the available navigation history.';
+    }
+    await saveCodemapResult(projectPath, result);
+    const block = renderCodemapBlock(result);
+    return [
+      `=== CODEBASE MAP (show this to the user; it is generated from real evidence — ${signals.sessionsAnalyzed} session(s), ${signals.accessCount} tool accesses) ===`,
+      block,
+      '=== END CODEBASE MAP ===',
+      '',
+      `This is a proposed managed block for ${projectPath}/CLAUDE.md and AGENTS.md. Show it to the user and ask if they want it saved. Only if they approve, call apply_codebase_map with project_path "${projectPath}". Never write without their explicit go-ahead.`,
+    ].join('\n');
+  }
+  if (name === 'apply_codebase_map') {
+    const projectPath = (args.project_path as string | undefined) ?? process.cwd();
+    const result = await loadCodemapResult(projectPath);
+    if (!result) {
+      throw new Error(`No generated codebase map found for ${projectPath}. Run distill_codebase_map first.`);
+    }
+    const written: string[] = [];
+    for (const target of ['CLAUDE.md', 'AGENTS.md'] as const) {
+      const { path, created } = await applyCodemap(projectPath, target, result);
+      written.push(`${created ? 'created' : 'updated'} ${path}`);
+    }
+    return `Codebase map written: ${written.join('; ')}. The managed block will refresh in place on the next apply.`;
   }
   throw new Error(`Unknown tool: ${name}`);
 }

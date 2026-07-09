@@ -6,14 +6,18 @@
 import { resolve } from 'node:path';
 import { ClaudeCodeAdapter } from './sources/claude-code.js';
 import { CursorAdapter } from './sources/cursor.js';
+import { ScreenAdapter } from './sources/screen.js';
 import type { Observation, ObservedProject, SourceAdapter } from './types.js';
 
-export type SourceName = 'claude-code' | 'cursor' | 'all';
+export type SourceName = 'claude-code' | 'cursor' | 'screen' | 'all';
 
 export function getAdapters(source: SourceName = 'all'): SourceAdapter[] {
   const adapters: SourceAdapter[] = [];
   if (source === 'all' || source === 'claude-code') adapters.push(new ClaudeCodeAdapter());
   if (source === 'all' || source === 'cursor') adapters.push(new CursorAdapter());
+  // Screen activity is workflow data, not conversational signals — it has its
+  // own mining path (ambient/workflows), so it never joins 'all' text scans.
+  if (source === 'screen') adapters.push(new ScreenAdapter());
   return adapters;
 }
 

@@ -13,7 +13,9 @@ export type ObservationKind =
   /** The human corrected or pushed back on something the agent did. */
   | 'correction'
   /** The human blocked a proposed action (e.g. rejected a tool call). */
-  | 'rejection';
+  | 'rejection'
+  /** Ambient observation of the human working (screen capture, browser…). */
+  | 'activity';
 
 export interface Observation {
   id: string;
@@ -76,6 +78,36 @@ export interface AopEntry {
   rationale: string;
   confidence: 'high' | 'medium' | 'low';
   evidence: AopEvidence[];
+  /** For workflow AOPs: when the live observer should offer to take over. */
+  trigger?: AopTrigger;
+  /** For workflow AOPs: the steps an agent follows to perform the work. */
+  procedure?: string[];
+}
+
+/**
+ * Live-trigger signature for a workflow AOP: the observer matches the
+ * frontmost app (and optionally a window-title fragment) against this to
+ * detect that the user is *starting* the workflow.
+ */
+export interface AopTrigger {
+  /** App name fragment, case-insensitive (e.g. "Chrome", "Mail"). */
+  app: string;
+  /** Window-title fragment, case-insensitive (e.g. "Inbox"). */
+  titlePattern?: string;
+  /** URL fragment, case-insensitive (e.g. "mail.google.com"). For web
+   * workflows this is far more precise than a window title. */
+  urlPattern?: string;
+  /** Only offer during this recurring time window — learned from WHEN the
+   * workflow actually happens ("Monday mornings"), not just what opens it. */
+  timeWindow?: AopTimeWindow;
+}
+
+export interface AopTimeWindow {
+  /** 0 = Sunday … 6 = Saturday. Empty/omitted = any day. */
+  weekdays?: number[];
+  /** Local hours, inclusive start / exclusive end (e.g. 8–11 = 8:00–10:59). */
+  startHour: number;
+  endHour: number;
 }
 
 export interface AopEvidence {
@@ -90,6 +122,9 @@ export interface Proposal {
   entry: AopEntry;
   targets: ProposalTarget[];
   status: 'pending' | 'accepted' | 'rejected';
+  /** Workflow proposals only: source candidate's step-key signature, so a
+   * rejection can suppress lookalike candidates later. */
+  signature?: string[];
 }
 
 export interface ProposalFile {
