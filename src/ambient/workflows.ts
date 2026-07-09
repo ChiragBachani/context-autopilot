@@ -15,7 +15,8 @@ import { runModel } from '../distill.js';
 import type { AopEntry, AopTimeWindow, AopTrigger, Proposal, ProposalFile } from '../types.js';
 import { browserStepKey } from './browser.js';
 import { ambientRoot, aopsRoot } from './config.js';
-import { listDays, readDay, readDaySegments, type ActivityRecord } from './records.js';
+import { basename } from 'node:path';
+import { listDays, readDay, readDayFiles, readDaySegments, type ActivityRecord } from './records.js';
 
 const EPISODE_GAP_MINUTES = 15;
 const MIN_STEPS = 3;
@@ -61,15 +62,29 @@ export function buildDayMoments(day: string): ActivityRecord[] {
     }
   }
 
-  const moments: ActivityRecord[] = segments.map((s, i) => ({
-    id: `seg-${day}-${i}`,
-    timestamp: s.start,
-    app: s.app,
-    windowTitle: s.windowTitle,
-    trigger: 'dwell',
-    url: s.url,
-    text: textFor.get(i),
-  }));
+  // File saves that happened during a segment enrich its text ("saved
+  // invoice.pdf") — high-signal for workflow detection.
+  const filesFor = new Map<number, string[]>();
+  for (const ev of readDayFiles(day)) {
+    const at = Date.parse(ev.timestamp);
+    const i = segments.findIndex((s) => at >= Date.parse(s.start) - 2000 && at <= Date.parse(s.end) + 2000);
+    if (i >= 0) (filesFor.get(i) ?? filesFor.set(i, []).get(i)!).push(basename(ev.path));
+  }
+
+  const moments: ActivityRecord[] = segments.map((s, i) => {
+    const files = filesFor.get(i);
+    const fileNote = files?.length ? `saved ${[...new Set(files)].slice(0, 4).join(', ')}` : '';
+    const ocr = textFor.get(i) ?? '';
+    return {
+      id: `seg-${day}-${i}`,
+      timestamp: s.start,
+      app: s.app,
+      windowTitle: s.windowTitle,
+      trigger: 'dwell' as const,
+      url: s.url,
+      text: [fileNote, ocr].filter(Boolean).join(' — ') || undefined,
+    };
+  });
   moments.push(...unmatched);
   moments.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   return moments;

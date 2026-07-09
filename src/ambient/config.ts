@@ -31,6 +31,10 @@ export interface AmbientConfig {
   blocklistApps: string[];
   /** Window-title fragments that are never captured (case-insensitive). */
   blocklistTitleKeywords: string[];
+  /** Watch these folders for file saves/creates (empty disables file sensing). */
+  watchDirs: string[];
+  /** Capture clipboard changes (never inside blocklisted apps). */
+  clipboard: boolean;
 }
 
 export const DEFAULT_CONFIG: AmbientConfig = {
@@ -68,7 +72,15 @@ export const DEFAULT_CONFIG: AmbientConfig = {
     'incognito',
     'private browsing',
   ],
+  // Home-relative; resolved against $HOME at read time so the default travels.
+  watchDirs: ['Desktop', 'Documents', 'Downloads'],
+  clipboard: true,
 };
+
+/** Absolute watch dirs (resolve home-relative defaults against $HOME). */
+export function resolvedWatchDirs(config: AmbientConfig): string[] {
+  return config.watchDirs.map((d) => (d.startsWith('/') ? d : join(homedir(), d)));
+}
 
 /** Base data dir: ~/.ctxlayer, or $CTXLAYER_HOME (tests / demo isolation). */
 export function ctxlayerHome(): string {

@@ -98,6 +98,73 @@ export function appendRecord(record: ActivityRecord): void {
   appendFileSync(join(dir, 'records.jsonl'), JSON.stringify(record) + '\n', 'utf8');
 }
 
+// ---------------------------------------------------------------------------
+// File-system events (Tier 4 sense) — <day>/files.jsonl
+
+export interface FileEvent {
+  timestamp: string;
+  /** Absolute path of the file that changed. */
+  path: string;
+  kind: 'saved' | 'added';
+}
+
+export function appendFileEvent(event: FileEvent): void {
+  const day = event.timestamp.slice(0, 10);
+  const dir = dayDir(day);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, 'files.jsonl'), JSON.stringify(event) + '\n', 'utf8');
+}
+
+export function readDayFiles(day: string): FileEvent[] {
+  const path = join(dayDir(day), 'files.jsonl');
+  if (!existsSync(path)) return [];
+  const out: FileEvent[] = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line) as FileEvent);
+    } catch {
+      continue;
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard events (Tier 4 sense) — <day>/clipboard.jsonl
+
+export interface ClipEvent {
+  timestamp: string;
+  /** Character count of the copied text. */
+  chars: number;
+  /** Clipped preview (~200 chars), never inside a blocklisted app. */
+  preview: string;
+  /** Frontmost app when copied, for context. */
+  app?: string;
+}
+
+export function appendClipEvent(event: ClipEvent): void {
+  const day = event.timestamp.slice(0, 10);
+  const dir = dayDir(day);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, 'clipboard.jsonl'), JSON.stringify(event) + '\n', 'utf8');
+}
+
+export function readDayClips(day: string): ClipEvent[] {
+  const path = join(dayDir(day), 'clipboard.jsonl');
+  if (!existsSync(path)) return [];
+  const out: ClipEvent[] = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line) as ClipEvent);
+    } catch {
+      continue;
+    }
+  }
+  return out;
+}
+
 export function readDay(day: string): ActivityRecord[] {
   const path = join(dayDir(day), 'records.jsonl');
   if (!existsSync(path)) return [];

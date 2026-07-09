@@ -153,6 +153,36 @@ func runAppIcon(_ out: String) {
   do { try png.write(to: URL(fileURLWithPath: out)) } catch { fail("could not write \(out)") }
 }
 
+/// Watch the clipboard: on each change, print one JSON line {ts, chars,
+/// preview}. Text only, preview clipped — never the full contents of large
+/// copies, never images/files. Runs until killed; the observer gates each line
+/// against the blocklist (so copies inside password managers are dropped).
+func runClipWatch() {
+  let pb = NSPasteboard.general
+  var lastChange = pb.changeCount
+  while true {
+    if pb.changeCount != lastChange {
+      lastChange = pb.changeCount
+      if let text = pb.string(forType: .string), !text.isEmpty {
+        let preview = String(text.prefix(200)).replacingOccurrences(of: "\n", with: " ")
+        let obj: [String: Any] = [
+          "ts": ISO8601DateFormatter().string(from: Date()),
+          "chars": text.count,
+          "preview": preview,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: obj),
+           let line = String(data: data, encoding: .utf8),
+           let out = (line + "\n").data(using: .utf8) {
+          // Write unbuffered: print() is block-buffered to a pipe and would be
+          // lost if the process is killed before an exit flush.
+          FileHandle.standardOutput.write(out)
+        }
+      }
+    }
+    Thread.sleep(forTimeInterval: 2)
+  }
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "ocr" where args.count == 2:
@@ -161,6 +191,8 @@ case "perm" where args.count == 2:
   runPerm(args[1])
 case "keycount":
   runKeyCount()
+case "clipwatch":
+  runClipWatch()
 case "appicon" where args.count == 2:
   runAppIcon(args[1])
 case "fixture" where args.count >= 4:

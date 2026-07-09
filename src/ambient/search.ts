@@ -6,7 +6,8 @@
  * the corpus is small enough that an index would be overengineering.
  */
 
-import { listDays, readDay, readDaySegments } from './records.js';
+import { basename } from 'node:path';
+import { listDays, readDay, readDayClips, readDayFiles, readDaySegments } from './records.js';
 
 export interface SearchHit {
   day: string;
@@ -17,7 +18,7 @@ export interface SearchHit {
   /** ±context around the OCR match; empty when the match was title/url/app. */
   snippet: string;
   /** Which field matched, for display. */
-  matched: 'text' | 'title' | 'url' | 'app';
+  matched: 'text' | 'title' | 'url' | 'app' | 'file' | 'clipboard';
   /** Relative screenshot path, when one still exists for the moment. */
   screenshot?: string;
 }
@@ -87,6 +88,17 @@ export function searchHistory(query: string, opts: { limit?: number } = {}): Sea
         snippet: '',
         matched,
       });
+    }
+
+    // Files saved and clipboard copies are searchable too — "where did I save
+    // that?" / "what did I copy earlier?".
+    for (const ev of readDayFiles(day)) {
+      if (!ev.path.toLowerCase().includes(q)) continue;
+      dayHits.push({ day, timestamp: ev.timestamp, app: 'Finder', windowTitle: basename(ev.path), url: undefined, snippet: `saved ${ev.path}`, matched: 'file' });
+    }
+    for (const ev of readDayClips(day)) {
+      if (!ev.preview.toLowerCase().includes(q)) continue;
+      dayHits.push({ day, timestamp: ev.timestamp, app: ev.app ?? 'clipboard', windowTitle: 'Copied text', url: undefined, snippet: snippetAround(ev.preview, q), matched: 'clipboard' });
     }
 
     dayHits.sort((a, b) => b.timestamp.localeCompare(a.timestamp));

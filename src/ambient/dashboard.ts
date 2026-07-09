@@ -63,6 +63,7 @@ function statusPayload(): Record<string, unknown> {
     enabled: config.enabled,
     pausedUntil: config.pausedUntil ?? null,
     textOnly: config.textOnly,
+    clipboard: config.clipboard,
     retentionDays: config.retentionDays,
     blocklistApps: config.blocklistApps,
     blocklistTitleKeywords: config.blocklistTitleKeywords,
@@ -243,6 +244,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const body = await readBody(req);
       const config = loadConfig();
       if (typeof body.textOnly === 'boolean') config.textOnly = body.textOnly;
+      if (typeof body.clipboard === 'boolean') config.clipboard = body.clipboard;
       if (Array.isArray(body.blocklistApps)) config.blocklistApps = (body.blocklistApps as string[]).filter(Boolean);
       if (Array.isArray(body.blocklistTitleKeywords)) {
         config.blocklistTitleKeywords = (body.blocklistTitleKeywords as string[]).filter(Boolean);
@@ -521,6 +523,7 @@ const PAGE = `<!doctype html>
     <div class="card">
       <b>Privacy</b>
       <label class="row"><input type="checkbox" id="textonly"> Text-only mode — delete every screenshot the moment its text is extracted</label>
+      <label class="row"><input type="checkbox" id="clipboard"> Capture clipboard — copies become searchable moments (never inside blocklisted apps)</label>
       <div class="muted" id="shotstats"></div>
       <div class="btns">
         <button class="act danger" onclick="wipe('today')">Delete today's captures</button>
@@ -585,6 +588,7 @@ function refreshStatus(){
       ? 'ON — capturing at intentional moments. Everything stays on this Mac.'
       : 'OFF — nothing is captured until you turn it back on. This survives restarts.';
     document.getElementById('textonly').checked = s.textOnly;
+  document.getElementById('clipboard').checked = s.clipboard;
     document.getElementById('shotstats').textContent = s.screenshots.count + ' screenshot(s) on disk (' + (s.screenshots.bytes/1048576).toFixed(1) + ' MB), auto-deleted after ' + s.retentionDays + ' days';
     if (!blocklistDirty) {
       document.getElementById('blockapps').value = s.blocklistApps.join('\\n');
@@ -954,6 +958,9 @@ function saveBlocklists(){
 }
 document.getElementById('textonly').addEventListener('change', function(e){
   api('/api/config', {textOnly: e.target.checked}).then(refreshStatus);
+};
+document.getElementById('clipboard').onchange = function(e){
+  api('/api/config', {clipboard: e.target.checked}).then(refreshStatus);
 });
 
 // Honor a deep link like /#activity on load.
