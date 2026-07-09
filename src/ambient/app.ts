@@ -12,7 +12,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ctxlayerHome, ambientRoot } from './config.js';
@@ -99,6 +99,28 @@ function registerWithLaunchServices(appPath: string): void {
 export interface AppBuildResult {
   appPath: string;
   created: boolean;
+  /** False = every byte was already identical, so macOS permission grants
+   * (which TCC ties to the unsigned bundle's contents) were left intact. */
+  changed: boolean;
+}
+
+/**
+ * TCC invalidates an unsigned app's permission grants when its files change.
+ * So: never touch a bundle file whose content is already correct. Returns
+ * true when a write actually happened.
+ */
+function writeIfChanged(path: string, content: string | Buffer, mode?: number): boolean {
+  const next = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
+  if (existsSync(path)) {
+    try {
+      if (readFileSync(path).equals(next)) return false;
+    } catch {
+      // unreadable → rewrite
+    }
+  }
+  writeFileSync(path, next);
+  if (mode !== undefined) chmodSync(path, mode);
+  return true;
 }
 
 /**
@@ -117,10 +139,14 @@ export function buildAppBundle(cliPath: string, applicationsDir = '/Applications
   mkdirSync(macos, { recursive: true });
   mkdirSync(resources, { recursive: true });
 
-  const hasIcon = buildIcns(join(resources, 'AppIcon.icns'));
+  // Icon: build once — regenerating identical pixels still rewrites the file
+  // and would invalidate TCC grants (see writeIfChanged).
+  const icnsPath = join(resources, 'AppIcon.icns');
+  const hasIcon = existsSync(icnsPath) || buildIcns(icnsPath);
+  let changed = false;
 
   // LSUIElement: menu-bar-only — no dock icon, no menu bar takeover.
-  writeFileSync(
+  changed = writeIfChanged(
     join(appPath, 'Contents', 'Info.plist'),
     `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -138,8 +164,7 @@ ${hasIcon ? '    <key>CFBundleIconFile</key><string>AppIcon</string>\n' : ''}   
   </dict>
 </plist>
 `,
-    'utf8',
-  );
+  ) || changed;
 
   // The bundle executable IS the Swift menu bar binary (not a shell wrapper) —
   // a script that exec's the binary doesn't reliably establish the AppKit /
@@ -149,10 +174,9 @@ ${hasIcon ? '    <key>CFBundleIconFile</key><string>AppIcon</string>\n' : ''}   
   // it's running as this bundle.
   void daemonScript; // kept fresh by writeDaemonScript(); the app invokes it
   const bundleExec = join(macos, 'ctxmenubar');
-  copyFileSync(menubar, bundleExec);
-  chmodSync(bundleExec, 0o755);
-  // Make Spotlight/Finder aware immediately — a fresh unsigned bundle
-  // otherwise may not surface in search until the next index sweep.
-  registerWithLaunchServices(appPath);
-  return { appPath, created };
+  changed = writeIfChanged(bundleExec, readFileSync(menubar), 0o755) || changed;
+  // Register only when something actually changed — Launch Services churn is
+  // pointless otherwise, and an untouched bundle keeps its TCC grants.
+  if (created || changed) registerWithLaunchServices(appPath);
+  return { appPath, created, changed };
 }

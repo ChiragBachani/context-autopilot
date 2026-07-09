@@ -563,7 +563,13 @@ async function cmdApp(): Promise<void> {
   if (!result) {
     fail('Could not build the app (needs the swiftc that ships with Xcode Command Line Tools).');
   }
-  console.log(`${result.created ? 'Installed' : 'Updated'} ${result.appPath}`);
+  console.log(
+    result.created
+      ? `Installed ${result.appPath}`
+      : result.changed
+        ? `Updated ${result.appPath} — macOS may ask you to re-grant Screen Recording (contents changed).`
+        : `${result.appPath} is up to date — untouched, permission grants preserved.`,
+  );
   console.log('Open it like any app (Spotlight: "Context Autopilot") — it starts observing and puts the eye in your menu bar.');
   console.log('First launch may ask for Screen Recording permission; flip the toggle once and reopen.');
 }
