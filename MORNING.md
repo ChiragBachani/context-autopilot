@@ -1,5 +1,19 @@
 # Good morning — here's what got built overnight ☀️
 
+## Update 5 — it's an app now, and automations actually run
+
+Four big things landed on `ambient` (all tests green — 93; each phase its own commit):
+
+- **Its own application.** Context Autopilot opens as a real macOS window (dock icon, ⌘W, remembers its size) — no browser, no tabs. The dashboard lives inside it. The menu-bar eye stays for at-a-glance state; "Open in browser" is still there if you want it. *One-time toll:* re-toggle Screen Recording for "Context Autopilot" once more (the bundle contents changed for the WebKit window; after this the content-stable builder keeps your grant).
+- **Automations that RUN (Tier 1).** Every automation now executes for real in a visible Claude session — web workflows via `claude --chrome` so it drives the browser; desktop ones plain. Each run leaves a **receipt** the agent writes itself ("Sent the weekly summary…"), shown on the card with ✓/✗ and duration. And you can **schedule** them (day-of-week + time → a background job). Verified end-to-end: a test automation ran and wrote its own receipt.
+- **A smarter brain (Tier 2).** A **weekly digest** (Sunday 6pm, or "Review my week") — verified live, it correctly called last week a "recovery week after a promotional push." **Time-aware triggers** so a workflow only offers when it actually recurs ("weekday mornings"). And **"not a pattern" now teaches** — dismiss a suggestion and lookalikes stop resurfacing, not just that exact title.
+- **Deeper senses (Tier 4).** It now notices **file saves** (Desktop/Documents/Downloads → "saved invoice.pdf") and **clipboard copies** (searchable — "what did I copy earlier?"). Both are 100% local and obey the same blocklist: verified live that a copy made inside a blocklisted app is dropped. Clipboard is ON by default; toggle it in Controls.
+
+Everything below is the earlier history.
+
+---
+
+
 **TL;DR:** Context Autopilot now has its Phase 3: **ambient screen observation.** It watches how you *work* (not just how you prompt), finds workflows you repeat across days, and offers to take them over. It's on a branch called `ambient` (a draft PR is open for you to review), and there's a **zero-permission demo you can run in 10 seconds** to see the whole thing work.
 
 Everything is local. Nothing was published to npm, nothing was merged to `main`, the live site is untouched.
