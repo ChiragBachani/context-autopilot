@@ -433,8 +433,14 @@ export const PAGE = `<!doctype html>
   .askbar input:focus{outline:none;border-color:var(--accent)}
   #askpanel{margin:10px 0 4px}
   .askentry{margin-bottom:10px}
-  .askq{font-weight:650;margin-bottom:8px}
-  .askq:before{content:'❯ ';color:var(--accent)}
+  .askq{font-weight:650;margin-bottom:8px;cursor:pointer;user-select:none}
+  .askq:before{content:'▾ ';color:var(--accent);display:inline-block;width:14px}
+  .askentry.collapsed .askq{margin-bottom:0}
+  .askentry.collapsed .askq:before{content:'▸ '}
+  .askentry.collapsed .aska{display:none}
+  .asktoolbar{font-size:12.5px;margin-bottom:10px}
+  .asktoolbar a,.asknote a{color:var(--accent2);cursor:pointer}
+  .asknote{padding:6px 2px;font-size:13px}
   .aska{line-height:1.6;font-size:14px}
   .askhits{margin-top:10px;font-size:12px}
   .askhit{display:inline-block;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:1px 8px;margin:2px 4px 0 0}
@@ -490,6 +496,7 @@ export const PAGE = `<!doctype html>
   <nav>
     <button data-tab="today" class="active">Today</button>
     <button data-tab="activity">Activity</button>
+    <button data-tab="ask">Ask<span class="badge" id="askbadge" style="display:none"></span></button>
     <button data-tab="patterns">Patterns<span class="badge" id="pendingbadge" style="display:none"></span></button>
     <button data-tab="autos">Automations</button>
     <button data-tab="controls">Controls</button>
@@ -546,6 +553,14 @@ export const PAGE = `<!doctype html>
     </div>
     <div id="proposals"></div>
   </section>
+  <section id="tab-ask" style="display:none">
+    <div class="minebar">
+      <span class="muted">Everything you've asked, newest first — click a question to expand or collapse it.</span>
+      <button class="act ghost" onclick="clearAsk()">Clear all</button>
+    </div>
+    <div id="askhistory"></div>
+  </section>
+
   <section id="tab-autos" style="display:none"><div id="aops"></div></section>
 
   <section id="tab-controls" style="display:none">
@@ -595,11 +610,12 @@ document.querySelectorAll('nav button').forEach(function(btn){
     location.hash = btn.dataset.tab; // deep-linkable tabs (e.g. /#activity)
     document.querySelectorAll('nav button').forEach(function(b){ b.classList.remove('active'); });
     btn.classList.add('active');
-    ['today','activity','patterns','autos','controls'].forEach(function(t){
+    ['today','activity','ask','patterns','autos','controls'].forEach(function(t){
       document.getElementById('tab-'+t).style.display = (btn.dataset.tab===t) ? '' : 'none';
     });
     if (btn.dataset.tab==='today') refreshSummary();
     if (btn.dataset.tab==='activity') loadEpisodes();
+    if (btn.dataset.tab==='ask') renderAsk();
     if (btn.dataset.tab==='patterns') loadProposals();
     if (btn.dataset.tab==='autos') loadAops();
   };
@@ -799,37 +815,74 @@ function clearSearch(){
 }
 
 // --- Ask: intent-level Q&A with an assist loop ---
-var askHistory = [];
+var askEntries = [];
+var askHomeHidden = localStorage.getItem('cf-ask-home') === 'hidden';
+
+function askEntryHTML(e, collapsed){
+  var body;
+  if (e.pending) body = '<div class="aska muted">Reading your activity — this can take up to a minute…</div>';
+  else if (e.error) body = '<div class="aska">'+esc(e.error)+'</div>';
+  else {
+    var hits = (e.hits||[]).slice(0,6).map(function(h){
+      var shot = h.screenshot ? ' <a href="/shot/'+esc(h.screenshot)+'" onclick="lightbox(this.href);return false">📸</a>' : '';
+      return '<span class="askhit">'+esc(h.day.slice(5))+' '+esc(h.timestamp.slice(11,16))+' '+esc(h.app)+shot+'</span>';
+    }).join('');
+    var handoff = e.handoff
+      ? '<div class="handoff"><button class="act run" onclick="workOn(this, \\''+esc(e.handoff.id)+'\\')">🚀 Work on this: '+esc(e.handoff.goal.slice(0,70))+'</button></div>'
+      : '';
+    body = '<div class="aska">'+esc(e.a).replace(/\\n/g,'<br>')+(hits?'<div class="askhits muted">Based on: '+hits+'</div>':'')+handoff+'</div>';
+  }
+  return '<div class="card askentry'+(collapsed?' collapsed':'')+'">'
+    + '<div class="askq" onclick="this.parentNode.classList.toggle(\\'collapsed\\')">'+esc(e.q)+'</div>'
+    + body + '</div>';
+}
+
+// One render feeds both the inline home panel and the Ask tab.
+function renderAsk(){
+  var n = askEntries.length;
+  var pending = askEntries.some(function(e){ return e.pending; });
+  // newest expanded, the rest collapsed
+  var cards = askEntries.map(function(e,i){ return askEntryHTML(e, !(e.pending || i===n-1)); }).reverse().join('');
+
+  var hist = document.getElementById('askhistory');
+  if (hist) hist.innerHTML = n ? cards
+    : '<div class="card"><div class="empty">No questions yet. Ask one from the bar at the top.</div></div>';
+
+  var badge = document.getElementById('askbadge');
+  if (badge){ badge.textContent = n; badge.style.display = n ? '' : 'none'; }
+
+  var panel = document.getElementById('askpanel');
+  if (askHomeHidden && !pending){
+    panel.style.display = n ? '' : 'none';
+    panel.innerHTML = n ? '<div class="asknote muted">Answers are kept in the <a href="#" onclick="gotoAsk();return false">Ask tab</a> to keep this page clear. <a href="#" onclick="setAskHome(true);return false">Show on home</a></div>' : '';
+  } else {
+    panel.style.display = n ? '' : 'none';
+    panel.innerHTML = (n ? '<div class="asktoolbar"><a href="#" onclick="setAskHome(false);return false">⤢ Move answers to Ask tab</a> · <a href="#" onclick="clearAsk();return false">Clear</a></div>' : '') + cards;
+  }
+}
+
+function gotoAsk(){ var b=document.querySelector('nav button[data-tab="ask"]'); if(b) b.click(); }
+function setAskHome(showOnHome){ askHomeHidden = !showOnHome; localStorage.setItem('cf-ask-home', askHomeHidden?'hidden':'shown'); renderAsk(); if(askHomeHidden) gotoAsk(); }
+function clearAsk(){ askEntries = []; renderAsk(); }
 
 function askQ(){
   var box = document.getElementById('askbox');
   var q = box.value.trim();
   if (q.length < 3) return;
   var btn = document.getElementById('askbtn');
-  var panel = document.getElementById('askpanel');
   btn.disabled = true; btn.textContent = 'Thinking…'; box.value = '';
-  panel.style.display = '';
-  var entry = document.createElement('div');
-  entry.className = 'card askentry';
-  entry.innerHTML = '<div class="askq">'+esc(q)+'</div><div class="aska muted">Reading your activity — this can take up to a minute…</div>';
-  panel.insertBefore(entry, panel.firstChild);
-  api('/api/ask', {question: q, history: askHistory.slice(-3)}).then(function(r){
-    btn.disabled = false; btn.textContent = 'Ask';
-    if (r.error){ entry.querySelector('.aska').textContent = r.error; return; }
-    askHistory.push({q: q, a: r.answer});
-    var hits = (r.hits||[]).slice(0,6).map(function(h){
-      var shot = h.screenshot ? ' <a href="/shot/'+esc(h.screenshot)+'" onclick="lightbox(this.href);return false">📸</a>' : '';
-      return '<span class="askhit">'+esc(h.day.slice(5))+' '+esc(h.timestamp.slice(11,16))+' '+esc(h.app)+shot+'</span>';
-    }).join('');
-    var handoff = r.handoff
-      ? '<div class="handoff"><button class="act run" onclick="workOn(this, \\''+esc(r.handoff.id)+'\\')">🚀 Work on this: '+esc(r.handoff.goal.slice(0,70))+'</button></div>'
-      : '';
-    entry.querySelector('.aska').className = 'aska';
-    entry.querySelector('.aska').innerHTML = esc(r.answer).replace(/\\n/g,'<br>')
-      + (hits ? '<div class="askhits muted">Based on: '+hits+'</div>' : '') + handoff;
+  var e = { q: q, pending: true, hits: [], handoff: null };
+  askEntries.push(e);
+  var hist = askEntries.filter(function(x){ return !x.pending && x.a; }).slice(-3).map(function(x){ return {q:x.q, a:x.a}; });
+  renderAsk();
+  api('/api/ask', {question: q, history: hist}).then(function(r){
+    btn.disabled = false; btn.textContent = 'Ask'; e.pending = false;
+    if (r.error){ e.error = r.error; renderAsk(); return; }
+    e.a = r.answer; e.hits = r.hits || []; e.handoff = r.handoff || null;
+    renderAsk();
   }).catch(function(){
-    btn.disabled = false; btn.textContent = 'Ask';
-    entry.querySelector('.aska').textContent = 'Could not answer right now.';
+    btn.disabled = false; btn.textContent = 'Ask'; e.pending = false;
+    e.error = 'Could not answer right now.'; renderAsk();
   });
 }
 
