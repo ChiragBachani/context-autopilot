@@ -1,5 +1,14 @@
 # Good morning — here's what got built overnight ☀️
 
+## Update 6 — Ask: talk to your activity, and hand off unfinished work
+
+The header of the app now has an **Ask bar**: *"what was I trying to achieve this morning across my applications — did I solve it by the afternoon?"* It interprets the observed trail (not just stats), cites day+time, supports follow-ups, and — the good part — when it finds an unfinished goal it offers **🚀 Work on this**, which opens a Claude session preloaded with the goal and everything you already tried.
+
+Verified on your real day: asked the benchmark question and it correctly inferred the "how should the daemon run persistently" design thread (from your Google search + return to Claude), judged it unresolved at that point, then on the follow-up traced the fix through your afternoon — reading your own messages off the screen — and correctly declined to offer a handoff because it was already solved. A synthetic handoff then ran the full loop: button → Terminal session → the work actually got done. Also fixed for real: model calls no longer freeze the daemon (async), proven by a fresh heartbeat throughout a 2-minute answer. 99 tests. `ctxlayer ask "…"` works from the terminal too.
+
+---
+
+
 ## Update 5 — it's an app now, and automations actually run
 
 Four big things landed on `ambient` (all tests green — 93; each phase its own commit):

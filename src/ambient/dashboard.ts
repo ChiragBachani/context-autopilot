@@ -19,7 +19,8 @@ import {
   readDay,
   screenshotStats,
 } from './records.js';
-import { launchAopInTerminal, observerAlive } from './observer.js';
+import { launchAopInTerminal, launchCliInTerminal, observerAlive } from './observer.js';
+import { askActivity, loadHandoff } from './ask.js';
 import { readRuns, syncAopSchedule } from './runner.js';
 import { searchHistory } from './search.js';
 import { generateAndSaveRecap, loadRecap, summarizeDayFromDisk } from './summarize.js';
@@ -130,6 +131,28 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (req.method === 'POST' && path === '/api/episodes/automate') {
       const body = await readBody(req);
       return automateEpisode(res, String(body.day ?? dayKey()), String(body.start ?? ''));
+    }
+    if (req.method === 'POST' && path === '/api/ask') {
+      const body = await readBody(req);
+      const question = String(body.question ?? '').trim();
+      if (!question) return json(res, { error: 'ask a question' }, 400);
+      const history = Array.isArray(body.history)
+        ? (body.history as { q?: unknown; a?: unknown }[])
+            .filter((t) => typeof t.q === 'string' && typeof t.a === 'string')
+            .map((t) => ({ q: t.q as string, a: t.a as string }))
+        : [];
+      try {
+        return json(res, await askActivity(question, history));
+      } catch (err) {
+        return json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+    if (req.method === 'POST' && path === '/api/ask/handoff') {
+      const body = await readBody(req);
+      const id = String(body.id ?? '');
+      if (!loadHandoff(id)) return json(res, { error: 'handoff not found' }, 404);
+      launchCliInTerminal(['assist', id]);
+      return json(res, { launched: true });
     }
     if (req.method === 'GET' && path === '/api/search') {
       const q = url.searchParams.get('q') ?? '';
@@ -405,6 +428,17 @@ export const PAGE = `<!doctype html>
   .daychk{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--muted);margin-right:7px;cursor:pointer}
   .daychk input{width:auto!important;display:inline!important;margin:0}
   .lastrun{font-size:12.5px;margin-top:6px}
+  .askbar{display:flex;gap:8px;margin:14px 0 4px}
+  .askbar input{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:10px;color:var(--text);font:inherit;font-size:14.5px;padding:11px 15px}
+  .askbar input:focus{outline:none;border-color:var(--accent)}
+  #askpanel{margin:10px 0 4px}
+  .askentry{margin-bottom:10px}
+  .askq{font-weight:650;margin-bottom:8px}
+  .askq:before{content:'❯ ';color:var(--accent)}
+  .aska{line-height:1.6;font-size:14px}
+  .askhits{margin-top:10px;font-size:12px}
+  .askhit{display:inline-block;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:1px 8px;margin:2px 4px 0 0}
+  .handoff{margin-top:12px}
   .searchbar{display:flex;gap:8px;margin-bottom:14px}
   .searchbar input{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:9px;color:var(--text);font:inherit;font-size:14px;padding:9px 13px}
   .searchbar input:focus{outline:none;border-color:var(--accent2)}
@@ -445,6 +479,12 @@ export const PAGE = `<!doctype html>
     <h1>Context Autopilot <span>· Ambient</span></h1>
     <div class="live"><span class="dot" id="livedot"></span><span id="livetext">…</span></div>
   </header>
+
+  <div class="askbar">
+    <input id="askbox" type="text" placeholder="Ask anything — what was I working on this morning? did I finish it?" onkeydown="if(event.key==='Enter')askQ()">
+    <button class="act approve" id="askbtn" onclick="askQ()">Ask</button>
+  </div>
+  <div id="askpanel" style="display:none"></div>
   <div class="demo-banner" id="demobanner">Demo mode — you're looking at synthetic data replayed through the real pipeline. Your own data is untouched.</div>
 
   <nav>
@@ -756,6 +796,48 @@ function clearSearch(){
   document.getElementById('searchresults').style.display = 'none';
   document.getElementById('activity-main').style.display = '';
   document.getElementById('clearsearch').style.display = 'none';
+}
+
+// --- Ask: intent-level Q&A with an assist loop ---
+var askHistory = [];
+
+function askQ(){
+  var box = document.getElementById('askbox');
+  var q = box.value.trim();
+  if (q.length < 3) return;
+  var btn = document.getElementById('askbtn');
+  var panel = document.getElementById('askpanel');
+  btn.disabled = true; btn.textContent = 'Thinking…'; box.value = '';
+  panel.style.display = '';
+  var entry = document.createElement('div');
+  entry.className = 'card askentry';
+  entry.innerHTML = '<div class="askq">'+esc(q)+'</div><div class="aska muted">Reading your activity — this can take up to a minute…</div>';
+  panel.insertBefore(entry, panel.firstChild);
+  api('/api/ask', {question: q, history: askHistory.slice(-3)}).then(function(r){
+    btn.disabled = false; btn.textContent = 'Ask';
+    if (r.error){ entry.querySelector('.aska').textContent = r.error; return; }
+    askHistory.push({q: q, a: r.answer});
+    var hits = (r.hits||[]).slice(0,6).map(function(h){
+      var shot = h.screenshot ? ' <a href="/shot/'+esc(h.screenshot)+'" onclick="lightbox(this.href);return false">📸</a>' : '';
+      return '<span class="askhit">'+esc(h.day.slice(5))+' '+esc(h.timestamp.slice(11,16))+' '+esc(h.app)+shot+'</span>';
+    }).join('');
+    var handoff = r.handoff
+      ? '<div class="handoff"><button class="act run" onclick="workOn(this, \\''+esc(r.handoff.id)+'\\')">🚀 Work on this: '+esc(r.handoff.goal.slice(0,70))+'</button></div>'
+      : '';
+    entry.querySelector('.aska').className = 'aska';
+    entry.querySelector('.aska').innerHTML = esc(r.answer).replace(/\\n/g,'<br>')
+      + (hits ? '<div class="askhits muted">Based on: '+hits+'</div>' : '') + handoff;
+  }).catch(function(){
+    btn.disabled = false; btn.textContent = 'Ask';
+    entry.querySelector('.aska').textContent = 'Could not answer right now.';
+  });
+}
+
+function workOn(btn, id){
+  btn.disabled = true; btn.textContent = 'Opening a Claude session…';
+  api('/api/ask/handoff', {id: id}).then(function(r){
+    btn.textContent = r.error ? ('Could not launch: '+r.error) : 'Session opened in Terminal ✓';
+  }).catch(function(){ btn.textContent = 'Could not launch.'; });
 }
 
 function mineNow(){

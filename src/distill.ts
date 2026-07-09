@@ -5,7 +5,7 @@
  * Claude Code users need no separate API key.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import type { AopEntry, Proposal, Signal } from './types.js';
 
 const MAX_SIGNALS = 40;
@@ -94,25 +94,39 @@ function clip(text: string, max: number): string {
   return t.length > max ? t.slice(0, max) + '…' : t;
 }
 
-/** Run the user's claude CLI in print mode, prompt on stdin. */
-function callClaudeCli(prompt: string, model?: string): string {
+/**
+ * Run the user's claude CLI in print mode, prompt on stdin. Async spawn — a
+ * spawnSync here would freeze the caller's event loop for the whole model
+ * call; when the caller is the observer daemon (narrate/digest/ask served
+ * from the dashboard), that starves the heartbeat and the menu bar's
+ * self-heal can spawn a duplicate daemon.
+ */
+function callClaudeCli(prompt: string, model?: string): Promise<string> {
   const args = ['-p', '--output-format', 'text'];
   if (model) args.push('--model', model);
-  const res = spawnSync('claude', args, {
-    input: prompt,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-    timeout: 600_000,
+  return new Promise((resolve, reject) => {
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('`claude -p` timed out after 10 minutes.'));
+    }, 600_000);
+    timer.unref();
+    child.stdout.on('data', (d) => (out += String(d)));
+    child.stderr.on('data', (d) => (err += String(d)));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(new Error(`Could not run the \`claude\` CLI (${e.message}). Install Claude Code or set ANTHROPIC_API_KEY.`));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(out);
+      else reject(new Error(`\`claude -p\` exited with ${code}: ${clip(err, 500)}`));
+    });
+    child.stdin.write(prompt);
+    child.stdin.end();
   });
-  if (res.error) {
-    throw new Error(
-      `Could not run the \`claude\` CLI (${res.error.message}). Install Claude Code or set ANTHROPIC_API_KEY.`,
-    );
-  }
-  if (res.status !== 0) {
-    throw new Error(`\`claude -p\` exited with ${res.status}: ${clip(res.stderr ?? '', 500)}`);
-  }
-  return res.stdout ?? '';
 }
 
 async function callApi(prompt: string, model?: string): Promise<string> {

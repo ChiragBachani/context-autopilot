@@ -24,6 +24,7 @@ import {
   checkPermissions,
   installLaunchAgents,
   launchAopInTerminal,
+  launchCliInTerminal,
   notify,
   observerAlive,
   runObserver,
@@ -36,6 +37,8 @@ import { generateAndSaveRecap, loadRecap, narrateDay, renderSummaryText, summari
 import { searchHistory } from './ambient/search.js';
 import { runAop, type RunOrigin } from './ambient/runner.js';
 import { generateWeeklyDigest, loadDigest } from './ambient/week.js';
+import { askActivity, buildAssistPrompt, loadHandoff } from './ambient/ask.js';
+import { isWebAop } from './ambient/runner.js';
 import {
   allDayMoments,
   applyWorkflowDecisions,
@@ -708,6 +711,44 @@ async function cmdDigest(flags: Flags): Promise<void> {
   }
 }
 
+/** Ask an intent-level question about your own activity. */
+async function cmdAsk(flags: Flags): Promise<void> {
+  const question = flags.args.join(' ').trim();
+  if (!question) fail('usage: ctxlayer ask "what was I trying to achieve this morning?"');
+  console.log('Reading your activity — this can take up to a minute…\n');
+  const result = await askActivity(question, [], { model: flags.model });
+  console.log(result.answer + '\n');
+  if (result.hits.length) {
+    console.log('Based on:');
+    for (const h of result.hits.slice(0, 6)) {
+      console.log(`  · ${h.day} ${h.timestamp.slice(11, 16)} [${h.app}] ${h.windowTitle.slice(0, 60)}`);
+    }
+  }
+  if (result.handoff) {
+    console.log(`\n🚀 Unfinished goal detected: ${result.handoff.goal}`);
+    console.log(`   Work on it now: ctxlayer assist ${result.handoff.id}`);
+  }
+}
+
+/** Hidden: open a Claude session preloaded with an Ask handoff (goal + trail). */
+async function cmdAssist(flags: Flags): Promise<void> {
+  const id = flags.args[0];
+  if (!id) fail('usage: ctxlayer assist <handoff-id>');
+  const handoff = loadHandoff(id);
+  if (!handoff) fail(`no handoff ${id} — ask a question first (ctxlayer ask "…")`);
+  if (!process.stdout.isTTY) {
+    launchCliInTerminal(['assist', id]);
+    return;
+  }
+  console.log(`Picking up: ${handoff.goal}\n`);
+  const args: string[] = [];
+  if (isWebAop({ trigger: undefined, procedure: [handoff.goal, handoff.context] })) args.push('--chrome');
+  args.push('--permission-mode', 'acceptEdits');
+  args.push(buildAssistPrompt(handoff));
+  const child = spawn('claude', args, { stdio: 'inherit' });
+  await new Promise<void>((resolve) => child.on('close', () => resolve()));
+}
+
 /** Search everything the observer has ever seen (OCR text, titles, URLs). */
 async function cmdSearch(flags: Flags): Promise<void> {
   const query = flags.args.join(' ').trim();
@@ -921,6 +962,8 @@ Ambient (macOS — screen observation, 100% local):
   summary    Today's work at a glance (time per app, focus, cadence); --narrate for a recap
   recap      Generate + save today's plain-English recap (the dashboard shows it instantly)
   search     Search everything ever observed (OCR text, titles, URLs) across all days
+  ask        Ask about your activity in plain English ("what was I trying to do this
+             morning, and did I solve it?") — grounded in the observed evidence
   menubar    Add the menu bar icon (toggle recording / open dashboard from the top bar)
   app        Install /Applications/Context Autopilot.app — open it and observing just starts
   scan/distill --source screen   mine observed days for repeated workflows
@@ -978,6 +1021,10 @@ async function main(): Promise<void> {
       return cmdSearch(flags);
     case 'digest':
       return cmdDigest(flags);
+    case 'ask':
+      return cmdAsk(flags);
+    case 'assist':
+      return cmdAssist(flags);
     case 'automate-episode':
       return cmdAutomateEpisode(flags);
     case 'run-aop':
