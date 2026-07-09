@@ -20,6 +20,7 @@ import {
   screenshotStats,
 } from './records.js';
 import { launchAopInTerminal, observerAlive } from './observer.js';
+import { readRuns, syncAopSchedule } from './runner.js';
 import { searchHistory } from './search.js';
 import { generateAndSaveRecap, loadRecap, summarizeDayFromDisk } from './summarize.js';
 import {
@@ -134,13 +135,22 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             : body.trigger && typeof body.trigger === 'object'
               ? (body.trigger as AopPatch['trigger'])
               : undefined,
+        schedule:
+          body.schedule === null
+            ? null
+            : body.schedule && typeof body.schedule === 'object'
+              ? (body.schedule as AopPatch['schedule'])
+              : undefined,
       };
       const aop = updateAop(String(body.slug ?? ''), patch);
+      if (aop) syncAopSchedule(aop);
       return json(res, aop ?? { error: 'not found' }, aop ? 200 : 404);
     }
     if (req.method === 'POST' && path === '/api/aops/delete') {
       const body = await readBody(req);
-      const ok = deleteAop(String(body.slug ?? ''));
+      const slug = String(body.slug ?? '');
+      syncAopSchedule({ slug, enabled: false, schedule: undefined }); // unload any agent first
+      const ok = deleteAop(slug);
       return json(res, ok ? { deleted: true } : { error: 'not found' }, ok ? 200 : 404);
     }
     if (req.method === 'POST' && path === '/api/aops/create') {
@@ -155,7 +165,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         rule: typeof body.rule === 'string' ? body.rule : undefined,
         procedure,
         trigger: body.trigger && typeof body.trigger === 'object' ? (body.trigger as AopPatch['trigger'] as never) : undefined,
+        schedule: body.schedule && typeof body.schedule === 'object' ? (body.schedule as never) : undefined,
       });
+      syncAopSchedule(aop);
       return json(res, aop);
     }
     if (req.method === 'GET' && path === '/api/day') {
@@ -183,9 +195,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return json(res, applyWorkflowDecisions(accept, reject));
     }
     if (req.method === 'GET' && path === '/api/aops') return json(res, loadAops());
+    if (req.method === 'GET' && path === '/api/aops/runs') {
+      return json(res, readRuns(url.searchParams.get('slug') ?? undefined).slice(0, 50));
+    }
     if (req.method === 'POST' && path === '/api/aops/toggle') {
       const body = await readBody(req);
       const aop = setAopEnabled(String(body.slug ?? ''), Boolean(body.enabled));
+      if (aop) syncAopSchedule(aop); // disabling also unloads its schedule
       return json(res, aop ?? { error: 'not found' }, aop ? 200 : 404);
     }
     if (req.method === 'POST' && path === '/api/aops/run') {
@@ -370,6 +386,11 @@ const PAGE = `<!doctype html>
   .aopform input,.aopform textarea{display:block;width:100%;margin-top:4px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text);font:inherit;font-size:13.5px;padding:8px 11px}
   .aopform input:focus,.aopform textarea:focus{outline:none;border-color:var(--accent2)}
   .aopform .triggerrow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .schedrow{display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}
+  .schedrow input[type=time]{background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text);font:inherit;padding:6px 9px}
+  .daychk{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--muted);margin-right:7px;cursor:pointer}
+  .daychk input{width:auto!important;display:inline!important;margin:0}
+  .lastrun{font-size:12.5px;margin-top:6px}
   .searchbar{display:flex;gap:8px;margin-bottom:14px}
   .searchbar input{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:9px;color:var(--text);font:inherit;font-size:14px;padding:9px 13px}
   .searchbar input:focus{outline:none;border-color:var(--accent2)}
@@ -748,8 +769,22 @@ function aopForm(a){
     + '<label>Title contains<input id="af-ttitle" value="'+esc(t.titlePattern||'')+'" placeholder="Inbox"></label>'
     + '<label>URL contains<input id="af-turl" value="'+esc(t.urlPattern||'')+'" placeholder="mail.google.com"></label></div>'
     + '<p class="muted" style="font-size:12.5px">Trigger is optional — when set, Autopilot offers to run this the moment you start the workflow.</p>'
+    + '<div class="schedrow"><label style="flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="af-sched" '+(a&&a.schedule?'checked':'')+' style="width:auto;display:inline"> Run on a schedule</label>'
+    + '<input id="af-stime" type="time" value="'+(a&&a.schedule?pad2(a.schedule.hour)+':'+pad2(a.schedule.minute):'09:00')+'" style="width:110px">'
+    + '<span class="days">'+[0,1,2,3,4,5,6].map(function(d){var on=a&&a.schedule&&a.schedule.weekdays&&a.schedule.weekdays.indexOf(d)>=0;return '<label class="daychk"><input type="checkbox" data-day="'+d+'" '+(on?'checked':'')+'>'+['Su','Mo','Tu','We','Th','Fr','Sa'][d]+'</label>';}).join('')+'</span></div>'
+    + '<p class="muted" style="font-size:12.5px">No days checked = every day. Scheduled runs open a visible session and leave a receipt.</p>'
     + '<div class="btns"><button class="act approve" onclick="saveAopForm(\\''+esc(a?a.slug:'')+'\\')">Save</button>'
     + '<button class="act ghost" onclick="loadAops()">Cancel</button></div></div>';
+}
+
+function pad2(n){ return (n<10?'0':'')+n; }
+
+function readSchedule(){
+  if (!document.getElementById('af-sched').checked) return null;
+  var t = document.getElementById('af-stime').value.split(':');
+  var days = [];
+  document.querySelectorAll('.daychk input:checked').forEach(function(c){ days.push(Number(c.dataset.day)); });
+  return { weekdays: days, hour: Number(t[0]||9), minute: Number(t[1]||0) };
 }
 
 function readAopForm(){
@@ -769,9 +804,10 @@ function readAopForm(){
 function saveAopForm(slug){
   var f = readAopForm();
   if (!f.title || !f.procedure.length){ alert('A title and at least one step are required.'); return; }
+  var sched = readSchedule();
   var call = slug
-    ? api('/api/aops/update', {slug: slug, title: f.title, rule: f.rule, procedure: f.procedure, trigger: f.trigger})
-    : api('/api/aops/create', {title: f.title, rule: f.rule, procedure: f.procedure, trigger: f.trigger || undefined});
+    ? api('/api/aops/update', {slug: slug, title: f.title, rule: f.rule, procedure: f.procedure, trigger: f.trigger, schedule: sched})
+    : api('/api/aops/create', {title: f.title, rule: f.rule, procedure: f.procedure, trigger: f.trigger || undefined, schedule: sched || undefined});
   call.then(function(r){ if (r.error) alert(r.error); loadAops(); });
 }
 
@@ -795,15 +831,54 @@ function loadAops(){
     el.innerHTML = header + aops.map(function(a){
       var steps = (a.procedure||[]).map(function(s){ return '<li>'+esc(s)+'</li>'; }).join('');
       var trig = a.trigger ? '<p class="muted">Offers to run when you open <b>'+esc(a.trigger.app)+'</b>'+(a.trigger.titlePattern?' ("'+esc(a.trigger.titlePattern)+'")':'')+(a.trigger.urlPattern?' <span class="t">['+esc(a.trigger.urlPattern)+']</span>':'')+'</p>' : '';
+      var sched = a.schedule ? '<p class="muted">⏰ Runs '+scheduleLabelText(a.schedule)+'</p>' : '';
       var manual = a.source === 'manual' ? ' <span class="muted" style="font-size:11px">(hand-made)</span>' : '';
       return '<div class="card prop" id="aop-'+esc(a.slug)+'"><h3>'+esc(a.title)+manual+' '+(a.enabled?'':'<span class="muted">(off)</span>')+'</h3>'
-        + '<p>'+esc(a.rule)+'</p><ol>'+steps+'</ol>'+trig
+        + '<p>'+esc(a.rule)+'</p><ol>'+steps+'</ol>'+trig+sched
+        + '<div class="lastrun muted" id="lastrun-'+esc(a.slug)+'"></div>'
         + '<div class="btns"><button class="act run" onclick="runAop(\\''+esc(a.slug)+'\\')">Run now</button>'
+        + '<button class="act ghost" onclick="showRuns(\\''+esc(a.slug)+'\\')">Receipts</button>'
         + '<button class="act ghost" onclick="editAop(\\''+esc(a.slug)+'\\')">Edit</button>'
         + '<button class="act ghost" onclick="toggleAop(\\''+esc(a.slug)+'\\','+(!a.enabled)+')">'+(a.enabled?'Disable':'Enable')+'</button>'
-        + '<button class="act danger" onclick="deleteAopUi(\\''+esc(a.slug)+'\\')">Delete</button></div></div>';
+        + '<button class="act danger" onclick="deleteAopUi(\\''+esc(a.slug)+'\\')">Delete</button></div>'
+        + '<div id="runs-'+esc(a.slug)+'"></div></div>';
     }).join('');
+    aops.forEach(function(a){ loadLastRun(a.slug); });
   });
+}
+
+function scheduleLabelText(s){
+  var days = (s.weekdays&&s.weekdays.length) ? s.weekdays.map(function(d){return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d];}).join(', ') : 'every day';
+  return days + ' at ' + pad2(s.hour)+':'+pad2(s.minute);
+}
+
+function runBadge(r){
+  if (!r.finishedAt) return '<span class="muted">… running</span>';
+  return r.exitCode === 0 ? '<span style="color:var(--accent)">✓</span>' : '<span style="color:var(--danger)">✗</span>';
+}
+
+function loadLastRun(slug){
+  api('/api/aops/runs?slug='+encodeURIComponent(slug)).then(function(runs){
+    var el = document.getElementById('lastrun-'+slug);
+    if (!el || !runs.length) return;
+    var r = runs[0];
+    el.innerHTML = 'Last run '+runBadge(r)+' '+new Date(r.startedAt).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})
+      + (r.seconds!=null?' · '+Math.round(r.seconds/60)+'m':'') + (r.origin==='scheduled'?' · scheduled':'');
+  }).catch(function(){});
+}
+
+function showRuns(slug){
+  var el = document.getElementById('runs-'+slug);
+  if (el.innerHTML){ el.innerHTML=''; return; }
+  api('/api/aops/runs?slug='+encodeURIComponent(slug)).then(function(runs){
+    if (!runs.length){ el.innerHTML = '<p class="muted" style="margin-top:8px">No runs yet.</p>'; return; }
+    el.innerHTML = runs.slice(0,10).map(function(r){
+      var when = new Date(r.startedAt).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+      var dur = r.seconds!=null ? Math.max(1,Math.round(r.seconds/60))+'m' : '';
+      var sum = r.summary ? '<div class="snip">'+esc(r.summary)+'</div>' : '<div class="snip muted">(no receipt written)</div>';
+      return '<div class="hit"><time>'+when+'</time><span>'+runBadge(r)+' '+esc(r.mode)+(r.origin!=='manual'?' · '+esc(r.origin):'')+' '+dur+sum+'</span></div>';
+    }).join('');
+  }).catch(function(){});
 }
 
 function runAop(slug){ api('/api/aops/run',{slug:slug}).then(function(){ alert('Opening a Claude Code session in Terminal with this procedure…'); }); }

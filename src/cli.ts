@@ -23,6 +23,7 @@ import { enterDemoMode, runDemoPipeline } from './ambient/demo.js';
 import {
   checkPermissions,
   installLaunchAgents,
+  launchAopInTerminal,
   notify,
   observerAlive,
   runObserver,
@@ -33,6 +34,7 @@ import { launchMenuBar, menubarBinary } from './ambient/menubar.js';
 import { buildAppBundle, writeDaemonScript } from './ambient/app.js';
 import { generateAndSaveRecap, loadRecap, narrateDay, renderSummaryText, summarizeDayFromDisk } from './ambient/summarize.js';
 import { searchHistory } from './ambient/search.js';
+import { runAop, type RunOrigin } from './ambient/runner.js';
 import {
   allDayMoments,
   applyWorkflowDecisions,
@@ -86,6 +88,8 @@ interface Flags {
   /** automate-episode selectors. */
   day?: string;
   start?: string;
+  /** run-aop: launched by a schedule LaunchAgent. */
+  scheduled?: boolean;
 }
 
 function parseArgs(argv: string[]): { command: string; flags: Flags } {
@@ -142,6 +146,9 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
         break;
       case '--start':
         flags.start = rest.shift();
+        break;
+      case '--scheduled':
+        flags.scheduled = true;
         break;
       case '--global':
       case '-g':
@@ -701,6 +708,36 @@ async function cmdSearch(flags: Flags): Promise<void> {
 }
 
 /**
+ * Run an automation now, in this terminal, with receipts. Used by the Run-now
+ * button and live-trigger dialog (both open Terminal with this command) and
+ * by per-AOP schedule LaunchAgents (--scheduled).
+ */
+async function cmdRunAop(flags: Flags): Promise<void> {
+  const slug = flags.args[0];
+  if (!slug) fail('usage: ctxlayer run-aop <slug>');
+  const aop = loadAops().find((a) => a.slug === slug);
+  if (!aop) fail(`no automation named "${slug}" — see: ctxlayer aop`);
+  if (!aop.enabled) fail(`"${aop.title}" is disabled — enable it on the dashboard first.`);
+  // No TTY (launchd schedule, background spawn) → re-dispatch into a visible
+  // Terminal window: attended-auto means every run is watchable. Inside the
+  // Terminal there IS a TTY, so the recursion terminates.
+  if (!process.stdout.isTTY) {
+    launchAopInTerminal(aop, flags.scheduled ? '--scheduled' : '');
+    return;
+  }
+  const origin: RunOrigin = flags.scheduled ? 'scheduled' : 'manual';
+  console.log(`Running "${aop.title}"${origin === 'scheduled' ? ' (scheduled)' : ''} — receipts land on the dashboard.\n`);
+  const result = await runAop(aop, origin);
+  if (result.exitCode === 0) {
+    console.log(`\n✓ "${aop.title}" finished — receipt saved.`);
+  } else {
+    notify('Context Autopilot', `Automation "${aop.title}" failed — see its receipts on the dashboard.`);
+    console.log(`\n✗ "${aop.title}" exited with code ${result.exitCode}.`);
+    process.exitCode = 1;
+  }
+}
+
+/**
  * Hidden: distill ONE episode into an enabled automation. The dashboard's
  * "⚡ Automate this" runs this as a child process so the model call never
  * blocks the daemon's event loop. Prints the created AOP as JSON.
@@ -918,6 +955,8 @@ async function main(): Promise<void> {
       return cmdSearch(flags);
     case 'automate-episode':
       return cmdAutomateEpisode(flags);
+    case 'run-aop':
+      return cmdRunAop(flags);
     case 'menubar':
     case 'tray':
       return cmdMenubar();

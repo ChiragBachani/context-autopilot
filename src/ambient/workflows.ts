@@ -432,6 +432,15 @@ export interface StoredAop {
   createdAt: string;
   /** 'screen' = mined from observation; 'manual' = hand-made in the dashboard. */
   source: 'screen' | 'manual';
+  /** Run on a clock, no trigger needed (a LaunchAgent per scheduled AOP). */
+  schedule?: AopSchedule;
+}
+
+export interface AopSchedule {
+  /** 0 = Sunday … 6 = Saturday. Empty/omitted = every day. */
+  weekdays?: number[];
+  hour: number;
+  minute: number;
 }
 
 export function slugify(title: string): string {
@@ -474,6 +483,7 @@ export interface AopPatch {
   rule?: string;
   procedure?: string[];
   trigger?: AopTrigger | null; // null clears the live trigger
+  schedule?: AopSchedule | null; // null clears the schedule
 }
 
 /**
@@ -498,8 +508,18 @@ export function updateAop(slug: string, patch: AopPatch): StoredAop | undefined 
       urlPattern: patch.trigger.urlPattern?.trim() || undefined,
     };
   }
+  if (patch.schedule === null) aop.schedule = undefined;
+  else if (patch.schedule) aop.schedule = normalizeSchedule(patch.schedule);
   writeAop(aop);
   return aop;
+}
+
+export function normalizeSchedule(s: AopSchedule): AopSchedule | undefined {
+  const hour = Math.min(23, Math.max(0, Math.floor(Number(s.hour))));
+  const minute = Math.min(59, Math.max(0, Math.floor(Number(s.minute))));
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return undefined;
+  const weekdays = (s.weekdays ?? []).map(Number).filter((d) => d >= 0 && d <= 6);
+  return { weekdays: weekdays.length ? [...new Set(weekdays)].sort() : undefined, hour, minute };
 }
 
 /** Remove an automation entirely (json + rendered markdown). */
@@ -517,6 +537,7 @@ export function createAop(fields: {
   rule?: string;
   procedure: string[];
   trigger?: AopTrigger;
+  schedule?: AopSchedule;
 }): StoredAop {
   const entry: AopEntry = {
     title: fields.title.trim(),
@@ -534,7 +555,9 @@ export function createAop(fields: {
     evidence: [],
   };
   saveAop(entry, 'manual');
-  return loadAops().find((a) => a.slug === slugify(entry.title))!;
+  const slug = slugify(entry.title);
+  if (fields.schedule) updateAop(slug, { schedule: fields.schedule });
+  return loadAops().find((a) => a.slug === slug)!;
 }
 
 export function loadAops(): StoredAop[] {
