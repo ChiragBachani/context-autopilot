@@ -11,9 +11,12 @@
  * a dead daemon too.
  */
 
-import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ctxlayerHome, ambientRoot } from './config.js';
+import { helperBinary } from './helper.js';
 import { menubarBinary } from './menubar.js';
 
 export function daemonScriptPath(): string {
@@ -50,6 +53,49 @@ nohup "${process.execPath}" "${cliPath}" observe --agent >> "${log}" 2>&1 &
 
 const APP_NAME = 'Context Autopilot';
 
+/**
+ * Render the eye icon and pack an .icns for the bundle. Best-effort: any
+ * failure (no helper, no iconutil) just means the app ships icon-less.
+ */
+function buildIcns(outIcns: string): boolean {
+  const helper = helperBinary();
+  if (!helper) return false;
+  const work = mkdtempSync(join(tmpdir(), 'ctx-icon-'));
+  try {
+    const master = join(work, 'icon-1024.png');
+    if (spawnSync(helper, ['appicon', master], { timeout: 30_000 }).status !== 0) return false;
+    const iconset = join(work, 'AppIcon.iconset');
+    mkdirSync(iconset);
+    // The sizes iconutil expects; @2x variants share the doubled pixel size.
+    const sizes: [string, number][] = [
+      ['icon_16x16.png', 16], ['icon_16x16@2x.png', 32],
+      ['icon_32x32.png', 32], ['icon_32x32@2x.png', 64],
+      ['icon_128x128.png', 128], ['icon_128x128@2x.png', 256],
+      ['icon_256x256.png', 256], ['icon_256x256@2x.png', 512],
+      ['icon_512x512.png', 512], ['icon_512x512@2x.png', 1024],
+    ];
+    for (const [name, px] of sizes) {
+      const res = spawnSync('sips', ['-z', String(px), String(px), master, '--out', join(iconset, name)], {
+        stdio: 'ignore',
+        timeout: 15_000,
+      });
+      if (res.status !== 0) return false;
+    }
+    return spawnSync('iconutil', ['-c', 'icns', iconset, '-o', outIcns], { stdio: 'ignore', timeout: 30_000 }).status === 0;
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/** Tell LaunchServices about the bundle so Spotlight lists it immediately. */
+function registerWithLaunchServices(appPath: string): void {
+  const lsregister =
+    '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
+  if (existsSync(lsregister)) {
+    spawnSync(lsregister, ['-f', appPath], { stdio: 'ignore', timeout: 30_000 });
+  }
+}
+
 export interface AppBuildResult {
   appPath: string;
   created: boolean;
@@ -67,7 +113,11 @@ export function buildAppBundle(cliPath: string, applicationsDir = '/Applications
   const appPath = join(applicationsDir, `${APP_NAME}.app`);
   const created = !existsSync(appPath);
   const macos = join(appPath, 'Contents', 'MacOS');
+  const resources = join(appPath, 'Contents', 'Resources');
   mkdirSync(macos, { recursive: true });
+  mkdirSync(resources, { recursive: true });
+
+  const hasIcon = buildIcns(join(resources, 'AppIcon.icns'));
 
   // LSUIElement: menu-bar-only — no dock icon, no menu bar takeover.
   writeFileSync(
@@ -83,7 +133,7 @@ export function buildAppBundle(cliPath: string, applicationsDir = '/Applications
     <key>CFBundleShortVersionString</key><string>0.6.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>launcher</string>
-    <key>LSUIElement</key><true/>
+${hasIcon ? '    <key>CFBundleIconFile</key><string>AppIcon</string>\n' : ''}    <key>LSUIElement</key><true/>
     <key>NSHumanReadableCopyright</key><string>MIT © The Context Layer</string>
   </dict>
 </plist>
@@ -102,11 +152,8 @@ exec "${menubar}"
     'utf8',
   );
   chmodSync(launcher, 0o755);
-  // A stale quarantine/cache bump helps Finder notice the refresh.
-  try {
-    statSync(appPath);
-  } catch {
-    // fine
-  }
+  // Make Spotlight/Finder aware immediately — a fresh unsigned bundle
+  // otherwise may not surface in search until the next index sweep.
+  registerWithLaunchServices(appPath);
   return { appPath, created };
 }

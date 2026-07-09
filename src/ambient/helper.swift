@@ -108,6 +108,51 @@ func runFixture(_ out: String, _ title: String, _ lines: [String]) {
   do { try png.write(to: URL(fileURLWithPath: out)) } catch { fail("could not write \(out): \(error.localizedDescription)") }
 }
 
+/// Render the app icon: the product's teal eye on a dark rounded square
+/// (matches the thecontextlayer.ai palette). 1024px master; the builder
+/// scales it down and packs an .icns.
+func runAppIcon(_ out: String) {
+  let size = 1024
+  guard let rep = NSBitmapImageRep(
+    bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8,
+    samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+  else { fail("could not create bitmap") }
+  NSGraphicsContext.saveGraphicsState()
+  guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { fail("no graphics context") }
+  NSGraphicsContext.current = ctx
+
+  // Dark navy rounded square (Big Sur-style inset).
+  let inset = CGFloat(size) * 0.09
+  let rect = NSRect(x: inset, y: inset, width: CGFloat(size) - 2 * inset, height: CGFloat(size) - 2 * inset)
+  let path = NSBezierPath(roundedRect: rect, xRadius: rect.width * 0.22, yRadius: rect.width * 0.22)
+  NSColor(calibratedRed: 0.051, green: 0.106, blue: 0.165, alpha: 1).setFill() // #0d1b2a
+  path.fill()
+
+  // Teal eye, centered.
+  let config = NSImage.SymbolConfiguration(pointSize: CGFloat(size) * 0.42, weight: .semibold)
+  if let eye = NSImage(systemSymbolName: "eye.fill", accessibilityDescription: nil)?.withSymbolConfiguration(config) {
+    let teal = NSColor(calibratedRed: 0.0, green: 0.784, blue: 0.627, alpha: 1) // #00c8a0
+    let tinted = NSImage(size: eye.size)
+    tinted.lockFocus()
+    teal.set()
+    let r = NSRect(origin: .zero, size: eye.size)
+    eye.draw(in: r)
+    r.fill(using: .sourceAtop)
+    tinted.unlockFocus()
+    let drawRect = NSRect(
+      x: (CGFloat(size) - eye.size.width) / 2,
+      y: (CGFloat(size) - eye.size.height) / 2,
+      width: eye.size.width, height: eye.size.height)
+    tinted.draw(in: drawRect)
+  }
+
+  NSGraphicsContext.current = nil
+  NSGraphicsContext.restoreGraphicsState()
+  guard let png = rep.representation(using: .png, properties: [:]) else { fail("could not encode png") }
+  do { try png.write(to: URL(fileURLWithPath: out)) } catch { fail("could not write \(out)") }
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "ocr" where args.count == 2:
@@ -116,6 +161,8 @@ case "perm" where args.count == 2:
   runPerm(args[1])
 case "keycount":
   runKeyCount()
+case "appicon" where args.count == 2:
+  runAppIcon(args[1])
 case "fixture" where args.count >= 4:
   runFixture(args[1], args[2], Array(args.dropFirst(3)))
 default:
