@@ -82,6 +82,9 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    // Persist position across launches so the user can ⌘-drag the icon to a
+    // spot they like (e.g. out from under a notch) and have it stay put.
+    item.autosaveName = "ai.thecontextlayer.autopilot.status"
     let menu = NSMenu()
     menu.delegate = self
     item.menu = menu
@@ -111,6 +114,7 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     image?.isTemplate = true
     button.image = image
     button.contentTintColor = color
+    FileHandle.standardError.write("DBG refreshIcon symbol=\(symbol) imageNil=\(image == nil) winFrame=\(String(describing: button.window?.frame))\n".data(using: .utf8)!)
   }
 
   // The user clicked the app while it's already running (Spotlight/Finder/Dock).
