@@ -9,8 +9,10 @@ import {
   buildAssistPrompt,
   dayRefsFromQuestion,
   extractSearchTerms,
+  hasExplicitTimeRef,
   loadHandoff,
   parseAskResponse,
+  resolveSpans,
   saveHandoff,
 } from '../dist/ambient/ask.js';
 import { appendRecord, appendSegment, type ActivityRecord, type ActivitySegment } from '../dist/ambient/records.js';
@@ -39,6 +41,21 @@ test('dayRefsFromQuestion resolves days and part-of-day spans', () => {
   const none = dayRefsFromQuestion('how is my automation doing?', NOW);
   assert.deepEqual(none.map((s) => s.day), ['2026-07-09'], 'default = today, whole day');
   assert.equal(none[0].startHour, undefined);
+});
+
+test('resolveSpans: no day named → scan the last several days (find old unfinished work)', () => {
+  assert.equal(hasExplicitTimeRef('what did I do this morning?', NOW), true);
+  assert.equal(hasExplicitTimeRef('what parts of the launch did I not finish?', NOW), false);
+
+  // Explicit day → that day only (deep).
+  assert.deepEqual(resolveSpans('what did I do yesterday?', NOW).map((s) => s.day), ['2026-07-08']);
+
+  // No day named → a multi-day recent window, so unfinished work from earlier surfaces.
+  const spans = resolveSpans('what parts of the MCP launch did I not finish?', NOW);
+  assert.ok(spans.length >= 3, 'scans several recent days');
+  assert.equal(spans[0].day, '2026-07-09');
+  assert.equal(spans[1].day, '2026-07-08');
+  assert.ok(spans.some((s) => s.day === '2026-07-06'), 'reaches back multiple days');
 });
 
 test('extractSearchTerms keeps entities, drops stopwords and day words', () => {

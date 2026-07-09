@@ -105,6 +105,28 @@ export function dayRefsFromQuestion(question: string, now: Date = new Date()): T
   return spans.slice(0, 6);
 }
 
+/** Did the question name a specific day / part-of-day at all? */
+export function hasExplicitTimeRef(question: string, now: Date = new Date()): boolean {
+  return dayWords(question, now).length > 0 || PART_OF_DAY.some(([re]) => re.test(question));
+}
+
+/** How many recent days to trail-scan when the question names no specific day. */
+const DEFAULT_LOOKBACK_DAYS = 4;
+
+/**
+ * The spans to actually mine for a question. When a day/time is named, use it
+ * (deep). When NOT — e.g. "what didn't I finish?" — a single day is too
+ * narrow; scan the last few days so unfinished work from earlier surfaces.
+ */
+export function resolveSpans(question: string, now: Date = new Date()): TimeSpan[] {
+  if (hasExplicitTimeRef(question, now)) return dayRefsFromQuestion(question, now);
+  const spans: TimeSpan[] = [];
+  for (let i = 0; i < DEFAULT_LOOKBACK_DAYS; i++) {
+    spans.push({ day: shiftDay(now, -i), label: i === 0 ? 'today' : i === 1 ? 'yesterday' : `${i} days ago` });
+  }
+  return spans;
+}
+
 const STOPWORDS = new Set(
   'the a an and or but if then was were is are am be been did do does what when where which who whom why how i me my you your it its this that these those with without about across into onto from for of on in at by to trying try achieve achieved solve solved help think know tell can could would should have had has get got today yesterday morning afternoon evening tonight week day days last will just like really them they were-was'.split(
     /\s+/,
@@ -123,8 +145,11 @@ export function extractSearchTerms(question: string): string[] {
 // ---------------------------------------------------------------------------
 // Evidence assembly
 
-const EVIDENCE_CAP = 18_000;
-const SPAN_MAX_LINES = 70;
+const EVIDENCE_CAP = 22_000;
+/** Total trail lines shared across all spans (so a 4-day scan stays bounded). */
+const TRAIL_LINE_BUDGET = 90;
+/** Recaps to include — the multi-day narrative for "what did I not finish?". */
+const RECAP_LOOKBACK_DAYS = 10;
 
 export interface AskEvidence {
   text: string;
@@ -141,11 +166,14 @@ export function buildAskEvidence(spans: TimeSpan[], terms: string[], now: Date =
   const sections: string[] = [];
 
   // 1. Deep chronological trail per referenced span — where intent lives.
+  // The line budget is shared across spans, so scanning several days for an
+  // unfinished-work question stays within the prompt budget.
+  const perSpanLines = Math.max(20, Math.floor(TRAIL_LINE_BUDGET / Math.max(1, spans.length)));
   for (const span of spans) {
     const segments = readDaySegments(span.day).filter((s) => inSpan(s.start, span));
     const records = readDay(span.day).filter((r) => inSpan(r.timestamp, span));
-    const trail = buildDayEvidence(segments, records).split('\n').slice(0, SPAN_MAX_LINES).join('\n');
-    sections.push(`## Activity trail — ${span.day} (${span.label})\n${trail || '(nothing observed in this span)'}`);
+    const trail = buildDayEvidence(segments, records).split('\n').slice(0, perSpanLines).join('\n');
+    if (trail) sections.push(`## Activity trail — ${span.day} (${span.label})\n${trail}`);
   }
 
   // 2. Entity lookups across all history (OCR, titles, URLs, files, clipboard).
@@ -176,11 +204,18 @@ export function buildAskEvidence(spans: TimeSpan[], terms: string[], now: Date =
   }
   if (statLines.length) sections.push(`## Daily shape (last 14 days)\n${statLines.join('\n')}`);
 
-  const recaps = [...new Set(spans.map((s) => s.day))]
+  // Recaps across a rolling window (not just the referenced days) — these are
+  // the day-by-day narratives that reveal what was finished vs left hanging
+  // over the past days.
+  const recapDays = new Set<string>([...spans.map((s) => s.day)]);
+  for (let i = 0; i < RECAP_LOOKBACK_DAYS; i++) recapDays.add(shiftDay(now, -i));
+  const recaps = [...recapDays]
+    .sort()
+    .reverse()
     .map((day) => ({ day, recap: loadRecap(day) }))
     .filter((r) => r.recap)
-    .map((r) => `  ${r.day}: ${r.recap!.narrative.slice(0, 400)}`);
-  if (recaps.length) sections.push(`## Saved recaps\n${recaps.join('\n')}`);
+    .map((r) => `  ${r.day}: ${r.recap!.narrative.slice(0, 320)}`);
+  if (recaps.length) sections.push(`## Day-by-day recaps (recent)\n${recaps.join('\n')}`);
 
   const runs = readRuns()
     .slice(0, 8)
@@ -228,6 +263,7 @@ How to interpret:
 - Infer what they were TRYING TO ACHIEVE from behavior: searches typed, error text on screen, docs opened, the sequence of apps. State your reasoning briefly ("you searched X, then opened Y — you were working on…").
 - If asked whether something got solved/finished, compare the relevant time spans and give a verdict — solved / not solved / unclear — WITH the evidence for it (e.g. "the error stops appearing after 14:32" or "the last trace at 11:50 still shows the failing state").
 - Ground every claim in the evidence; cite day + time. If the trail doesn't show something, say so plainly — never invent.
+- The evidence may span SEVERAL days (activity trails + day-by-day recaps). For "what didn't I finish / what's left" questions, look ACROSS all the days shown, not just the most recent — unfinished work often started days ago. Attribute each thread to its day(s).
 - Current date/time: ${now.toString()}. Be concise and plain-spoken; 1-3 short paragraphs.
 
 Output format — respond with ONLY a JSON object (no fence, no prose outside it):
@@ -264,7 +300,7 @@ export function parseAskResponse(raw: string): { answer: string; handoff?: AskHa
 
 export async function askActivity(question: string, history: AskTurn[] = [], opts: AskOptions = {}): Promise<AskResult> {
   const now = opts.now ?? new Date();
-  const spans = dayRefsFromQuestion(question, now);
+  const spans = resolveSpans(question, now);
   const terms = extractSearchTerms(question);
   const evidence = buildAskEvidence(spans, terms, now);
   const call = opts.runModel ?? runModel;
