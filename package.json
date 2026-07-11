@@ -1,6 +1,6 @@
 {
   "name": "context-autopilot",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Automated context collection for coding agents. Watches your real agent sessions, finds what you keep repeating and correcting, and distills it into CLAUDE.md / AGENTS.md \u2014 with diffs you approve.",
   "keywords": [
     "claude-code",

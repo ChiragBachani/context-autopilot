@@ -21,21 +21,22 @@ import {
 import { recordDistilledSignals } from './state.js';
 import type { ProposalFile } from './types.js';
 
-const SERVER = { name: 'context-autopilot', version: '0.5.0' };
+const SERVER = { name: 'context-autopilot', version: '0.5.3' };
 const PROTOCOL_VERSION = '2025-06-18';
 
 /** Loaded into the agent's context at session start via initialize.instructions. */
 const SERVER_INSTRUCTIONS = `Context Autopilot turns the user's own past sessions into agent context rules, with their approval.
 
 Rules for using these tools:
-- Distill results contain a section marked USER REPORT — include it in your reply to the user unchanged. The evidence quotes in it are the user's own words and are the entire justification for each rule; never drop or paraphrase them.
-- If you collect accept/reject decisions with a structured question / checkbox tool, use the provided PICKER OPTIONS verbatim as the option labels and descriptions (they embed the evidence), and show the USER REPORT in message text first.
+- Present proposals in your chat message and STOP. Distill results contain a section marked USER REPORT — include it in your reply unchanged, as message text, then end your turn and wait for the user's reply. The evidence quotes in it are the user's own words and are the entire justification for each rule; never drop or paraphrase them.
+- Decisions happen in chat by default. The user reads the report and replies in plain words ("accept 1 and 3, reject 2"); that is the normal and expected path. Do NOT open a structured question / checkbox picker in the same turn as the report — a picker appears instantly and covers the report the user needs to read first, defeating the purpose.
+- Only use a picker if the user EXPLICITLY asks for one (e.g. "give me checkboxes"). If they do, still show the USER REPORT as message text first, then present the picker in a later turn using the provided PICKER OPTIONS verbatim.
 - Never call apply_context_proposals until the user has explicitly stated which proposals to accept or reject.
 - Proactive use: if the user corrects you more than once in a session, or repeats an instruction they've clearly given before, offer (at a natural pause) to run a distill.`;
 
 /** Wraps a distill result so relaying evidence requires zero composition. */
 function distillResultText(report: string, picker: string, applyHint: string): string {
-  return `=== USER REPORT (include in your reply to the user unchanged) ===\n${report}\n=== END USER REPORT ===\n\nPICKER OPTIONS — if you use a structured question/checkbox tool for decisions, use exactly these labels/descriptions:\n${picker}\n\nAfter the user states their decisions, ${applyHint} Never apply without their explicit answer.`;
+  return `=== USER REPORT (REQUIRED: include in your chat reply unchanged, then STOP and wait for the user) ===\n${report}\n=== END USER REPORT ===\n\nHOW TO COLLECT THE DECISION: Post the report above as your chat message and end your turn. The user replies in plain words ("accept 1 and 3, reject 2"). Do NOT open a checkbox/question picker in this turn — it would cover the report before the user can read it. Only use a picker if the user explicitly asks for checkboxes, and even then show the report as text first. Picker labels, if ever needed:\n${picker}\n\nAfter the user states their decisions, ${applyHint} Never apply without their explicit answer.`;
 }
 
 const TOOLS = [
