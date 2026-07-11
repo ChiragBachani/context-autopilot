@@ -39,14 +39,15 @@ const PROTOCOL_VERSION = '2025-06-18';
 const SERVER_INSTRUCTIONS = `Context Autopilot turns the user's own past sessions into agent context rules, with their approval.
 
 Rules for using these tools:
-- ALWAYS present proposals in your chat message FIRST: distill results contain a section marked USER REPORT — include it in your reply unchanged, as message text, before any decision UI. The evidence quotes in it are the user's own words and are the entire justification for each rule; never drop or paraphrase them. Popups and pickers steal attention — a report shown only alongside a picker is a report the user never reads.
-- Collecting decisions: a plain chat reply ("accept 1 and 3, reject 2") is always sufficient and must always work. You MAY additionally offer a structured question / checkbox tool as a convenience AFTER the report is in your message text — if you do, use the provided PICKER OPTIONS verbatim as labels/descriptions (they embed the evidence). Never make a picker the only way to decide, and never present it before the in-chat report.
-- Never call apply_context_proposals until the user has explicitly stated which proposals to accept or reject (in chat or via the picker).
+- Present proposals in your chat message and STOP. Distill results contain a section marked USER REPORT — include it in your reply unchanged, as message text, then end your turn and wait for the user's reply. The evidence quotes in it are the user's own words and are the entire justification for each rule; never drop or paraphrase them.
+- Decisions happen in chat by default. The user reads the report and replies in plain words ("accept 1 and 3, reject 2"); that is the normal and expected path. Do NOT open a structured question / checkbox picker in the same turn as the report — a picker appears instantly and covers the report the user needs to read first, defeating the purpose.
+- Only use a picker if the user EXPLICITLY asks for one (e.g. "give me checkboxes"). If they do, still show the USER REPORT as message text first, then present the picker in a later turn using the provided PICKER OPTIONS verbatim.
+- Never call apply_context_proposals until the user has explicitly stated which proposals to accept or reject.
 - Proactive use: if the user corrects you more than once in a session, or repeats an instruction they've clearly given before, offer (at a natural pause) to run a distill.`;
 
 /** Wraps a distill result so relaying evidence requires zero composition. */
 function distillResultText(report: string, picker: string, applyHint: string): string {
-  return `=== USER REPORT (REQUIRED: include in your chat reply unchanged, BEFORE any decision UI) ===\n${report}\n=== END USER REPORT ===\n\nDecisions: a plain chat reply from the user always suffices. You may ALSO offer a structured question/checkbox tool after showing the report in text — if so, use exactly these labels/descriptions:\n${picker}\n\nAfter the user states their decisions (chat or picker), ${applyHint} Never apply without their explicit answer, and never let a picker be the only place the proposals appear.`;
+  return `=== USER REPORT (REQUIRED: include in your chat reply unchanged, then STOP and wait for the user) ===\n${report}\n=== END USER REPORT ===\n\nHOW TO COLLECT THE DECISION: Post the report above as your chat message and end your turn. The user replies in plain words ("accept 1 and 3, reject 2"). Do NOT open a checkbox/question picker in this turn — it would cover the report before the user can read it. Only use a picker if the user explicitly asks for checkboxes, and even then show the report as text first. Picker labels, if ever needed:\n${picker}\n\nAfter the user states their decisions, ${applyHint} Never apply without their explicit answer.`;
 }
 
 const TOOLS = [

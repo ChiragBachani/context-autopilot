@@ -7,14 +7,14 @@
     "url": "https://github.com/ChiragBachani/context-autopilot",
     "source": "github"
   },
-  "version": "0.5.2",
+  "version": "0.6.0",
   "websiteUrl": "https://thecontextlayer.ai",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "context-autopilot",
-      "version": "0.5.2",
+      "version": "0.6.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
