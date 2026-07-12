@@ -19,9 +19,10 @@ import {
   saveProposals,
 } from './propose.js';
 import { recordDistilledSignals } from './state.js';
+import { buildPromoteSignals, scanAllProjectMemory } from './memory.js';
 import type { ProposalFile } from './types.js';
 
-const SERVER = { name: 'context-autopilot', version: '0.5.3' };
+const SERVER = { name: 'context-autopilot', version: '0.6.0' };
 const PROTOCOL_VERSION = '2025-06-18';
 
 /** Loaded into the agent's context at session start via initialize.instructions. */
@@ -32,7 +33,8 @@ Rules for using these tools:
 - Decisions happen in chat by default. The user reads the report and replies in plain words ("accept 1 and 3, reject 2"); that is the normal and expected path. Do NOT open a structured question / checkbox picker in the same turn as the report — a picker appears instantly and covers the report the user needs to read first, defeating the purpose.
 - Only use a picker if the user EXPLICITLY asks for one (e.g. "give me checkboxes"). If they do, still show the USER REPORT as message text first, then present the picker in a later turn using the provided PICKER OPTIONS verbatim.
 - Never call apply_context_proposals until the user has explicitly stated which proposals to accept or reject.
-- Proactive use: if the user corrects you more than once in a session, or repeats an instruction they've clearly given before, offer (at a natural pause) to run a distill.`;
+- Proactive use: if the user corrects you more than once in a session, or repeats an instruction they've clearly given before, offer (at a natural pause) to run a distill.
+- promote_to_global follows the same report-then-stop rule as the distill tools: show the USER REPORT, end your turn, apply only after explicit decisions.`;
 
 /** Wraps a distill result so relaying evidence requires zero composition. */
 function distillResultText(report: string, picker: string, applyHint: string): string {
@@ -111,6 +113,21 @@ const TOOLS = [
     description:
       "Mine ALL of the user's projects for cross-project signals about how they like agents to work (verification effort, planning style, workflow preferences) and distill them into proposals for their personal global context file (~/.claude/CLAUDE.md). Proposals are saved to ~/.claude/.ctxlayer/proposals.json for review; nothing is applied automatically. Can take a minute.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'promote_to_global',
+    description:
+      "Scan the memory the user's agents have already saved per project (Claude Code auto-memory directories plus each project's CLAUDE.md/AGENTS.md) and find rules that belong in the user's GLOBAL ~/.claude/CLAUDE.md: how-the-user-works rules, and rules duplicated across 2+ projects. Additive only — project files are never edited. Proposals are saved to ~/.claude/.ctxlayer/proposals.json; NOTHING is applied until the user approves via apply_context_proposals with global=true. Can take a minute.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dry_run: {
+          type: 'boolean',
+          description: 'List the candidate memory entries as JSON without calling the model.',
+        },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: 'distill_context_proposals',
@@ -208,6 +225,50 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       generatedAt: new Date().toISOString(),
       projectPath: rootPath,
       source: 'all',
+      proposals,
+    };
+    await saveProposals(file);
+    return distillResultText(
+      renderUserReport(proposals, 'global'),
+      renderPickerOptions(proposals),
+      'call apply_context_proposals with global=true and their exact accept/reject titles.',
+    );
+  }
+  if (name === 'promote_to_global') {
+    const rootPath = join(homedir(), '.claude');
+    const scan = await scanAllProjectMemory();
+    if (scan.entries.length === 0) return 'No per-project memory found to promote.';
+    if (args.dry_run) {
+      return JSON.stringify(
+        {
+          projectsScanned: scan.projectsScanned,
+          entryCount: scan.entries.length,
+          skippedGlobal: scan.skippedGlobal,
+          entries: scan.entries.map((e) => ({
+            project: e.projectPath ?? e.slug,
+            origin: e.origin,
+            file: e.file,
+            text: e.text.length > 160 ? e.text.slice(0, 160) + '…' : e.text,
+          })),
+        },
+        null,
+        2,
+      );
+    }
+    const existingContext = await readExistingContext(rootPath);
+    const signals = buildPromoteSignals(scan.entries, existingContext);
+    if (signals.length === 0) {
+      return 'Everything in project memory is either project-specific or already covered globally.';
+    }
+    const proposals = await distill(signals, { existingContext, scope: 'promote' });
+    if (proposals.length === 0) {
+      return 'The distiller found nothing in project memory worth promoting to the global layer.';
+    }
+    const file: ProposalFile = {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      projectPath: rootPath,
+      source: 'project-memory',
       proposals,
     };
     await saveProposals(file);

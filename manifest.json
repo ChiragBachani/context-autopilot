@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "context-autopilot",
   "display_name": "Context Autopilot",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "Mines your Claude Code and Cursor sessions into evidence-based CLAUDE.md / AGENTS.md rules you approve.",
   "long_description": "Automated context collection for coding agents. Context Autopilot mines your real agent session history for repeated instructions, corrections, and rejected actions, then distills them into CLAUDE.md / AGENTS.md rules \u2014 with your own past messages as evidence. Includes global mode (cross-project rules about how you work), staleness detection, and in-chat approval. 100% local, zero dependencies, no API key required.",
   "author": {

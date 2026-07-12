@@ -62,6 +62,7 @@ npm install -g context-autopilot   # or use npx, no install
 | `ctxlayer projects` | List projects with observable session history (Claude Code + Cursor) |
 | `ctxlayer scan` | Mine signals from this project's sessions |
 | `ctxlayer distill` | Distill signals into proposals (`.ctxlayer/proposals.json`) |
+| `ctxlayer promote` | Scan every project's saved memory (auto-memory + CLAUDE.md) for rules that belong in your global `~/.claude/CLAUDE.md`; `--dry-run` lists candidates without calling a model |
 | `ctxlayer apply` | Review proposals interactively; write accepted ones |
 | `ctxlayer check` | Fast, model-free: how many new signals since the last distill? `--hook` prints a nudge only past `--threshold` (default 3), else stays silent |
 | `ctxlayer stale` | Find context-file references the repo has outgrown — missing files, removed npm scripts. Exits 1 on findings, so it drops straight into CI |
@@ -74,6 +75,14 @@ ctxlayer distill --global
 ```
 
 Project context files hold repo conventions — but some feedback is about *you*: "explain things in plain English", "don't build while I'm brainstorming", "run independent work in parallel". Global mode mines **all** your projects across **all** your tools for exactly that, and maintains a managed block in your personal `~/.claude/CLAUDE.md`, so every future session in every project starts already knowing how you like to work. Rules that mention a specific project are excluded by design — those belong in the project's own context file.
+
+### Promote saved memory to global
+
+```bash
+ctxlayer promote
+```
+
+Where global mode mines your *session transcripts*, `promote` mines the memory your agents have **already written down**: each project's auto-memory files (`~/.claude/projects/<name>/memory/`) and each repo's `CLAUDE.md`/`AGENTS.md`. Rules about how you work — or rules duplicated in two or more projects — are proposed for your global `~/.claude/CLAUDE.md`, generalized and with the source files as evidence. Additive only: project files are read, never edited. Anything already covered globally is filtered before the model is even called.
 
 Options: `--project <path>`, `--global`, `--source claude-code|cursor|all`, `--model <model>`, `--min-score <n>`, `--yes`, `--json`.
 
@@ -101,7 +110,7 @@ Then ask Claude to "update project context from my session history" — or don't
 }
 ```
 
-Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_proposals`, `distill_global_context`, `apply_context_proposals`, and `find_stale_context`.
+Exposes `list_observable_projects`, `scan_context_signals`, `distill_context_proposals`, `distill_global_context`, `promote_to_global`, `apply_context_proposals`, and `find_stale_context`.
 
 The approval loop closes entirely inside chat: distill tools return each proposal with its evidence and instruct the agent to ask you which to accept; `apply_context_proposals` then writes **exactly** the titles you approved, remembers the ones you rejected (never re-proposed), and leaves the rest pending. No tool ever touches a context file without your explicit decision.
 

@@ -4,6 +4,13 @@ export { CursorAdapter } from './sources/cursor.js';
 export { discoverAll, observeEverything, observeProject, getAdapters } from './engine.js';
 export { buildSignals } from './cluster.js';
 export { distill } from './distill.js';
+export {
+  buildPromoteSignals,
+  extractContextEntries,
+  parseFrontmatter,
+  scanAllProjectMemory,
+  splitFacts,
+} from './memory.js';
 export { findStaleReferences } from './stale.js';
 export {
   applyToFile,

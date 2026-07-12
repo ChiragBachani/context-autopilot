@@ -19,9 +19,11 @@ export interface DistillOptions {
   /**
    * 'project' (default): distill repo-specific conventions for the project's
    * context file. 'global': distill cross-project rules about how the
-   * developer works, for their personal global context file.
+   * developer works, for their personal global context file. 'promote':
+   * review already-written per-project memory and pick out entries that
+   * belong in the global file.
    */
-  scope?: 'project' | 'global';
+  scope?: 'project' | 'global' | 'promote';
 }
 
 export async function distill(signals: Signal[], opts: DistillOptions = {}): Promise<Proposal[]> {
@@ -35,7 +37,7 @@ export async function distill(signals: Signal[], opts: DistillOptions = {}): Pro
     entry,
     // Global rules live only in the user's ~/.claude/CLAUDE.md — there is no
     // standard global AGENTS.md location (yet).
-    targets: scope === 'global' ? ['CLAUDE.md'] : ['CLAUDE.md', 'AGENTS.md'],
+    targets: scope === 'project' ? ['CLAUDE.md', 'AGENTS.md'] : ['CLAUDE.md'],
     status: 'pending',
   }));
 }
@@ -51,7 +53,24 @@ Rules:
 - Never include project-specific facts (file names, stacks, product behavior) — those belong in per-project context files, not here. A rule that mentions a specific project is wrong by definition.
 - Prefer signals that recur across multiple projects, and explicit meta-feedback about the agent's behavior even if seen once.`;
 
-function buildPrompt(signals: Signal[], scope: 'project' | 'global', existingContext?: string): string {
+const PROMOTE_BRIEF = `Your job: review the per-project memory below and identify ONLY the entries that belong at the GLOBAL layer — the user's personal ~/.claude/CLAUDE.md, which applies to every project they work on.
+
+An entry belongs at the global layer only if:
+- it describes HOW the user works or wants agents to behave — communication style, verification effort, planning habits, tooling and workflow preferences — independent of any single codebase; or
+- essentially the same rule appears in 2 or more different projects (the signal header will say "across N projects"); promote the generalized form.
+
+Rules:
+- Never promote project-specific facts: file names, directory layouts, stacks, product behavior, domain models, deployment details. A rule that only makes sense inside one repo stays in that repo — leaving it out is the correct answer.
+- Rewrite promoted rules in general form: strip project names, paths, and repo-specific nouns.
+- This is additive-only: you are proposing new lines for the global file. Never propose edits or removals of project files or of existing global content.`;
+
+const BRIEFS = { project: PROJECT_BRIEF, global: GLOBAL_BRIEF, promote: PROMOTE_BRIEF } as const;
+
+function buildPrompt(
+  signals: Signal[],
+  scope: 'project' | 'global' | 'promote',
+  existingContext?: string,
+): string {
   const evidence = signals
     .map((s, i) => {
       const quotes = s.observations
@@ -68,9 +87,14 @@ function buildPrompt(signals: Signal[], scope: 'project' | 'global', existingCon
     })
     .join('\n\n');
 
-  return `You are a context distiller for AI coding agents. Below are signals mined from a developer's real agent sessions: instructions they repeated across sessions, corrections they made when the agent got something wrong, and tool calls they rejected.
+  const intro =
+    scope === 'promote'
+      ? "You are a context distiller for AI coding agents. Below are durable memory entries the user's agents have already written down, collected from per-project auto-memory files and project context files (CLAUDE.md / AGENTS.md)."
+      : "You are a context distiller for AI coding agents. Below are signals mined from a developer's real agent sessions: instructions they repeated across sessions, corrections they made when the agent got something wrong, and tool calls they rejected.";
 
-${scope === 'global' ? GLOBAL_BRIEF : PROJECT_BRIEF}
+  return `${intro}
+
+${BRIEFS[scope]}
 - Each rule must be imperative and at most 2 sentences.
 - Ground every rule in the evidence: only propose what the quotes actually support.
 - If the existing context file already covers a rule, skip it.

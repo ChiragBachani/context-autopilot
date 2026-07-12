@@ -26,6 +26,7 @@ import {
   saveProposals,
 } from './propose.js';
 import { freshSignals, loadDistilledFingerprints, recordDistilledSignals } from './state.js';
+import { buildPromoteSignals, scanAllProjectMemory } from './memory.js';
 import type { ProposalFile, ProposalTarget, Signal } from './types.js';
 
 interface Flags {
@@ -36,6 +37,7 @@ interface Flags {
   json?: boolean;
   yes?: boolean;
   hook?: boolean;
+  dryRun?: boolean;
   out?: string;
   minScore: number;
   threshold: number;
@@ -78,6 +80,9 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
         break;
       case '--hook':
         flags.hook = true;
+        break;
+      case '--dry-run':
+        flags.dryRun = true;
         break;
       case '--out':
       case '-o':
@@ -226,6 +231,69 @@ async function cmdDistill(flags: Flags): Promise<void> {
   }
 }
 
+/**
+ * Promote already-written per-project memory (auto-memory fact files +
+ * project CLAUDE.md/AGENTS.md) into global-context proposals. Additive only:
+ * project files are read, never edited.
+ */
+async function cmdPromote(flags: Flags): Promise<void> {
+  const scan = await scanAllProjectMemory();
+  const skipped = scan.skippedGlobal.length
+    ? ` (skipped global layer: ${scan.skippedGlobal.join(', ')})`
+    : '';
+  if (scan.entries.length === 0) {
+    console.log(`No per-project memory found to promote${skipped}.`);
+    return;
+  }
+  console.log(`Scanned ${scan.projectsScanned} project(s), ${scan.entries.length} memory entr(ies)${skipped}.`);
+  if (flags.dryRun || flags.json) {
+    const entries = scan.entries.map((e) => ({
+      project: e.projectPath ?? e.slug,
+      origin: e.origin,
+      file: e.file,
+      text: e.text.length > 160 ? e.text.slice(0, 160) + '…' : e.text,
+    }));
+    if (flags.json) {
+      console.log(JSON.stringify({ projectsScanned: scan.projectsScanned, skippedGlobal: scan.skippedGlobal, entries }, null, 2));
+    } else {
+      for (const e of entries) {
+        console.log(`\n  [${e.origin}] ${e.project}`);
+        console.log(`      "${e.text}"`);
+      }
+      console.log('\nDry run — no model called, nothing saved. Run `ctxlayer promote` to distill.');
+    }
+    return;
+  }
+  const rootPath = globalRoot();
+  const existingContext = await readExistingContext(rootPath);
+  const signals = buildPromoteSignals(scan.entries, existingContext);
+  if (signals.length === 0) {
+    console.log('Everything in project memory is either project-specific or already covered globally.');
+    return;
+  }
+  console.log(`Reviewing ${signals.length} candidate(s) with ${process.env.ANTHROPIC_API_KEY ? 'the Anthropic API' : 'your local `claude` CLI'}…`);
+  const proposals = await distill(signals, { existingContext, model: flags.model, scope: 'promote' });
+  if (proposals.length === 0) {
+    console.log('The distiller found nothing in project memory worth promoting to the global layer.');
+    return;
+  }
+  const file: ProposalFile = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    projectPath: rootPath,
+    source: 'project-memory',
+    proposals,
+  };
+  const saved = await saveProposals(file);
+  console.log(`\n${proposals.length} proposal(s) saved to ${saved}:`);
+  proposals.forEach((p, i) => console.log(renderProposalPreview(p, i, proposals.length)));
+  if (flags.yes) {
+    await applyAll(file, () => Promise.resolve(true));
+  } else {
+    console.log('\nNext: `ctxlayer apply --global` to review and write the ones you accept.');
+  }
+}
+
 async function cmdApply(flags: Flags): Promise<void> {
   const projectPath = flags.global ? globalRoot() : projectDir(flags);
   const file = await loadProposals(projectPath);
@@ -367,6 +435,9 @@ Commands:
   projects   List projects with observable agent sessions (Claude Code + Cursor)
   scan       Mine repeated instructions, corrections & rejections from sessions
   distill    Distill signals into CLAUDE.md / AGENTS.md proposals
+  promote    Scan every project's saved memory (auto-memory + CLAUDE.md) for
+             rules that belong in your global ~/.claude/CLAUDE.md
+             (--dry-run: list candidates without calling the model)
   apply      Review proposals interactively and write accepted ones
   check      Fast, model-free: any new signals since the last distill?
              (--hook: print a nudge only past --threshold; silent otherwise)
@@ -397,6 +468,8 @@ async function main(): Promise<void> {
       return cmdScan(flags);
     case 'distill':
       return cmdDistill(flags);
+    case 'promote':
+      return cmdPromote(flags);
     case 'apply':
       return cmdApply(flags);
     case 'check':

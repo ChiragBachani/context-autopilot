@@ -27,7 +27,7 @@ interface TranscriptLine {
   userType?: string;
 }
 
-function projectsRoot(): string {
+export function projectsRoot(): string {
   return join(homedir(), '.claude', 'projects');
 }
 
@@ -233,7 +233,7 @@ async function newestFile(dir: string, files: string[]): Promise<string> {
 }
 
 /** Read the first entry that has a cwd, without parsing the whole file. */
-async function firstCwd(filePath: string): Promise<string | undefined> {
+export async function firstCwd(filePath: string): Promise<string | undefined> {
   const raw = await readFile(filePath, 'utf8');
   for (const line of raw.split('\n').slice(0, 50)) {
     if (!line.trim()) continue;
