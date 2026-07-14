@@ -15,7 +15,7 @@ Two products share this git repo but live in **separate folders on separate bran
 
 ## Rules
 - This branch may pull from `main` (shared engine fixes) but ambient code must never merge INTO `main`.
-- Do not publish this branch to npm — versions here (0.6.x) are internal.
+- Do not publish this branch to npm. **Version caution:** `main` already shipped **0.6.0** (chat-first + promote-to-global). The `ambient` branch's old "v0.6.0 prep" stamp is STALE — when ambient eventually versions, it must be **≥0.7.0**; never reuse a 0.6.x number.
 - Privacy invariants (do not weaken without the user): capture is local-only, blocklisted apps/URLs skipped pre-capture, incognito never read, key/click COUNTS only — no keystroke content unless the user explicitly opts in later.
 
 Full project history: the CommandFort project's memory directory (`project-context-layer.md`).
