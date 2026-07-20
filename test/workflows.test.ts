@@ -118,6 +118,42 @@ test('the same routine twice in ONE day surfaces on day one', () => {
   assert.equal(candidates[0].episodes.length, 2);
 });
 
+test('a motif buried inside long, noisy sessions still surfaces across days', () => {
+  // The core routine (Gmail → Sheets) is embedded in different noise each day.
+  // Whole-episode matching missed this; motif mining finds the repeated core.
+  const web = (title: string, url: string, ts: string): ActivityRecord => ({ ...record('Google Chrome', title, ts), url });
+  const noisyDay = (day: string, junk: [string, string][]) => {
+    const at = (m: number) => `${day}T10:${String(m).padStart(2, '0')}:00.000Z`;
+    const rows: ActivityRecord[] = [];
+    junk.slice(0, 2).forEach(([a, t], i) => rows.push(record(a, t, at(i))));
+    rows.push(web('Inbox - Gmail', 'https://mail.google.com/mail/u/0', at(5)));
+    rows.push(web('Metrics - Google Sheets', 'https://docs.google.com/spreadsheets/d/1', at(7)));
+    junk.slice(2).forEach(([a, t], i) => rows.push(record(a, t, at(10 + i))));
+    return rows;
+  };
+  const byDay = new Map<string, Episode[]>();
+  byDay.set('2026-07-06', buildEpisodes('2026-07-06', noisyDay('2026-07-06', [['Slack', '#general'], ['Messages', 'Mom'], ['Discord', '#eng']])));
+  byDay.set('2026-07-07', buildEpisodes('2026-07-07', noisyDay('2026-07-07', [['Xcode', 'App'], ['Terminal', 'zsh'], ['Notes', 'todo']])));
+  const candidates = findWorkflowCandidates(byDay, []);
+  const gmailSheets = candidates.find((c) =>
+    c.episodes[0].steps.some((s) => s.title.includes('Gmail')) &&
+    c.episodes[0].steps.some((s) => s.title.includes('Sheets')),
+  );
+  assert.ok(gmailSheets, 'the Gmail→Sheets core recurs across both noisy days');
+  assert.deepEqual(gmailSheets!.days, ['2026-07-06', '2026-07-07']);
+});
+
+test('a run within a single app/site is not a workflow candidate', () => {
+  // "Claude → Claude" (title drift) or same-site scrolling scores 1 context.
+  const day = '2026-07-08';
+  const oneApp = (d: string, o = 0) => [
+    record('Claude', 'Project A chat', `${d}T11:${String(0 + o).padStart(2, '0')}:00.000Z`),
+    record('Claude', 'Project B chat', `${d}T11:${String(3 + o).padStart(2, '0')}:00.000Z`),
+  ];
+  const byDay = new Map<string, Episode[]>([[day, buildEpisodes(day, [...oneApp(day), ...oneApp(day, 30)])]]);
+  assert.equal(findWorkflowCandidates(byDay, []).length, 0);
+});
+
 test('sequence similarity distinguishes alike and unlike flows', () => {
   const a = buildEpisodes('d', morning('2026-07-07'))[0].steps;
   const b = buildEpisodes('d', morning('2026-06-30', 2))[0].steps;

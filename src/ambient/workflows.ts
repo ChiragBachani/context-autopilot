@@ -23,6 +23,13 @@ const MIN_STEPS = 3;
 const MATCH_THRESHOLD = 0.55;
 const MAX_CANDIDATES = 8;
 const MAX_TEXT_PER_STEP = 110;
+// Motif mining (sensitive profile): recurring sub-sequences of 2..6 steps,
+// surfaced once they occur at least twice — even twice within one day.
+// Whole-episode matching missed real routines buried inside long, noisy
+// sessions; motifs find the repeated core regardless of surrounding noise.
+const MOTIF_MIN_LEN = 2;
+const MOTIF_MAX_LEN = 6;
+const MOTIF_MIN_OCCURRENCES = 2;
 
 // ---------------------------------------------------------------------------
 // Moments — the miner's single source of truth
@@ -203,41 +210,109 @@ export interface WorkflowCandidate {
   days: string[];
 }
 
+/** One appearance of a motif: the exact step slice, and where it happened. */
+interface MotifOccurrence {
+  day: string;
+  episode: Episode;
+  steps: WorkflowStep[];
+}
+
 /**
- * Group episodes whose step sequences recur — across days, or twice within
- * the same day. "You keep doing this" shouldn't have to wait for tomorrow:
- * same-day repetition surfaces on day one (the distiller rates cross-day
- * recurrence as higher confidence).
+ * Every contiguous sub-sequence (length MOTIF_MIN_LEN..MOTIF_MAX_LEN) of an
+ * episode's steps is a motif. We key a motif by its step-key signature so the
+ * same routine matches across days despite drifting titles/counts.
+ */
+function extractMotifs(episode: Episode): Map<string, WorkflowStep[]> {
+  const found = new Map<string, WorkflowStep[]>();
+  const steps = episode.steps;
+  for (let len = MOTIF_MIN_LEN; len <= MOTIF_MAX_LEN; len++) {
+    for (let i = 0; i + len <= steps.length; i++) {
+      const slice = steps.slice(i, i + len);
+      const key = slice.map(stepKey).join('  →  ');
+      if (!found.has(key)) found.set(key, slice); // one occurrence per motif per episode-offset set
+    }
+  }
+  return found;
+}
+
+/**
+ * Find recurring workflows by mining motifs — short sub-sequences of steps
+ * that repeat across days OR twice within a day — rather than matching whole
+ * episodes. Real routines live buried inside long, noisy sessions; whole-
+ * episode matching washed them out. A motif surfaces once it occurs at least
+ * MOTIF_MIN_OCCURRENCES times. Overlapping motifs are de-duplicated in favor
+ * of the longest (most specific) one, so we propose the full routine, not its
+ * fragments.
  */
 export function findWorkflowCandidates(
   episodesByDay: Map<string, Episode[]>,
   dismissed: string[][] = loadAmbientState().dismissedSignatures,
 ): WorkflowCandidate[] {
-  const all = [...episodesByDay.values()].flat().filter((e) => e.steps.length >= MIN_STEPS);
-  const groups: Episode[][] = [];
-  for (const episode of all) {
-    let placed = false;
-    for (const group of groups) {
-      if (sequenceSimilarity(episode.steps, group[0].steps) >= MATCH_THRESHOLD) {
-        group.push(episode);
-        placed = true;
-        break;
-      }
+  const episodes = [...episodesByDay.values()].flat().filter((e) => e.steps.length >= MOTIF_MIN_LEN);
+
+  // motif key -> its occurrences (each episode contributes at most one per key)
+  const byMotif = new Map<string, MotifOccurrence[]>();
+  for (const episode of episodes) {
+    for (const [key, steps] of extractMotifs(episode)) {
+      (byMotif.get(key) ?? byMotif.set(key, []).get(key)!).push({ day: episode.day, episode, steps });
     }
-    if (!placed) groups.push([episode]);
   }
+
+  // Keep motifs that (a) actually recur and (b) span at least two distinct
+  // contexts (different app, or different website) — a run within one app/site
+  // is just working there, not a workflow worth automating. Longest keys first
+  // so specific routines win over their own fragments.
+  const recurring = [...byMotif.entries()]
+    .filter(([, occ]) => occ.length >= MOTIF_MIN_OCCURRENCES && distinctContexts(occ[0].steps) >= 2)
+    .sort((a, b) => b[0].length - a[0].length);
+
   const candidates: WorkflowCandidate[] = [];
-  for (const group of groups) {
-    const days = [...new Set(group.map((e) => e.day))].sort();
-    if (days.length < 2 && group.length < 2) continue; // a single occurrence is never a pattern
-    // "Not a pattern" teaches: skip groups that look like something the user
-    // already dismissed (not just exact-title matches — lookalikes too).
-    const sig = group[0].steps.map(stepKey);
-    if (dismissed.some((d) => keySequenceSimilarity(sig, d) >= MATCH_THRESHOLD)) continue;
-    candidates.push({ id: `wf-${candidates.length}`, episodes: group, days });
+  // Every motif we've already ruled on (accepted OR dismissed), longest-first.
+  // A shorter motif contained in a decided one — with no broader day support —
+  // is just a fragment of that routine and must not resurface on its own.
+  const decided: { key: string; days: string[] }[] = [];
+  for (const [key, occ] of recurring) {
+    const days = [...new Set(occ.map((o) => o.day))].sort();
+    if (decided.some((d) => d.key.includes(key) && daysSubset(days, d.days))) continue;
+    // Respect "not a pattern": skip motifs that look like a dismissed one, but
+    // still mark them decided so their fragments stay suppressed too.
+    const sig = occ[0].steps.map(stepKey);
+    if (dismissed.some((d) => keySequenceSimilarity(sig, d) >= MATCH_THRESHOLD)) {
+      decided.push({ key, days });
+      continue;
+    }
+    // Synthesize an episode per occurrence from the motif slice, so the
+    // distiller sees the tight routine instead of the surrounding noise.
+    const occEpisodes: Episode[] = occ.map((o) => ({
+      day: o.day,
+      start: o.steps[0].timestamp,
+      end: o.steps[o.steps.length - 1].timestamp,
+      steps: o.steps,
+    }));
+    candidates.push({ id: `wf-${candidates.length}`, episodes: occEpisodes, days });
+    decided.push({ key, days });
   }
+
   candidates.sort((a, b) => b.days.length - a.days.length || b.episodes.length - a.episodes.length);
   return candidates.slice(0, MAX_CANDIDATES);
+}
+
+/** True if every day in `sub` is also in `sup`. */
+function daysSubset(sub: string[], sup: string[]): boolean {
+  const s = new Set(sup);
+  return sub.every((d) => s.has(d));
+}
+
+/**
+ * How many distinct app/website contexts a step sequence touches. "Claude →
+ * Claude" and "Chrome@google → Chrome@google" score 1 (not a workflow);
+ * "Gmail → Sheets" or "Claude → Chrome@localhost" score 2+.
+ */
+function distinctContexts(steps: WorkflowStep[]): number {
+  const contexts = new Set(
+    steps.map((s) => `${s.app.toLowerCase()}::${s.url ? s.url.replace(/^https?:\/\//, '').split('/')[0] : ''}`),
+  );
+  return contexts.size;
 }
 
 // ---------------------------------------------------------------------------
