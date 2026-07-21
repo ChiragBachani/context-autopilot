@@ -121,8 +121,19 @@ function callClaudeCli(prompt: string, model?: string): Promise<string> {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve(out);
-      else reject(new Error(`\`claude -p\` exited with ${code}: ${clip(err, 500)}`));
+      if (code === 0) return resolve(out);
+      // The claude CLI prints auth failures to stdout, so diagnose against both
+      // streams — reporting only stderr left users with a blank "exited with 1:".
+      const detail = `${err}\n${out}`.trim();
+      if (/oauth|authenticat|session expired|not logged in|log ?in/i.test(detail)) {
+        reject(
+          new Error(
+            'Your Claude login has expired. Open a terminal, run `claude`, sign in again, then retry — this unblocks day/week recaps and workflow distillation.',
+          ),
+        );
+      } else {
+        reject(new Error(`\`claude -p\` exited with ${code}: ${clip(detail, 500) || '(no output)'}`));
+      }
     });
     child.stdin.write(prompt);
     child.stdin.end();
