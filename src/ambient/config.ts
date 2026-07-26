@@ -40,6 +40,15 @@ export interface AmbientConfig {
   watchDirs: string[];
   /** Capture clipboard changes (never inside blocklisted apps). */
   clipboard: boolean;
+  /** Live Assist: proactively offer help when an in-flight goal is detected. */
+  assistOffers: boolean;
+  /** Minimum minutes between Live Assist offers (0 disables the throttle). */
+  assistOfferEveryMinutes: number;
+  /** Idle seconds before an offer may interrupt — bypassed when the user is
+   * already waiting on a long-running operation. */
+  assistOfferIdleSeconds: number;
+  /** Distinct days a situation must recur before it's proposed as a standing AOP. */
+  assistGraduateAfterDays: number;
 }
 
 export const DEFAULT_CONFIG: AmbientConfig = {
@@ -80,6 +89,12 @@ export const DEFAULT_CONFIG: AmbientConfig = {
   // Home-relative; resolved against $HOME at read time so the default travels.
   watchDirs: ['Desktop', 'Documents', 'Downloads'],
   clipboard: true,
+  // Live Assist. Offers are rare by construction: the detector fires often, so
+  // these throttles — not the detector — are what keep it from becoming noise.
+  assistOffers: true,
+  assistOfferEveryMinutes: 90,
+  assistOfferIdleSeconds: 45,
+  assistGraduateAfterDays: 3,
 };
 
 /** Absolute watch dirs (resolve home-relative defaults against $HOME). */

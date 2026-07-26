@@ -65,6 +65,8 @@ import {
   saveProposals,
 } from './propose.js';
 import { freshSignals, loadDistilledFingerprints, recordDistilledSignals } from './state.js';
+import { assistWorkspace, buildAssistArgs, writeSafeSettings } from './ambient/safety.js';
+import { buildLiveAssistPrompt } from './ambient/assist.js';
 import type { ProposalFile, ProposalTarget, Signal } from './types.js';
 
 interface Flags {
@@ -87,6 +89,8 @@ interface Flags {
   agent?: boolean;
   notify?: boolean;
   narrate?: boolean;
+  /** Live Assist: launch the session under enforced non-destructive rules. */
+  safe?: boolean;
   /** Positional arguments (e.g. the search query). */
   args: string[];
   /** automate-episode selectors. */
@@ -141,6 +145,9 @@ function parseArgs(argv: string[]): { command: string; flags: Flags } {
         break;
       case '--notify':
         flags.notify = true;
+        break;
+      case '--safe':
+        flags.safe = true;
         break;
       case '--narrate':
         flags.narrate = true;
@@ -737,12 +744,31 @@ async function cmdAssist(flags: Flags): Promise<void> {
   const handoff = loadHandoff(id);
   if (!handoff) fail(`no handoff ${id} — ask a question first (ctxlayer ask "…")`);
   if (!process.stdout.isTTY) {
-    launchCliInTerminal(['assist', id]);
+    launchCliInTerminal(flags.safe ? ['assist', id, '--safe'] : ['assist', id]);
     return;
   }
   console.log(`Picking up: ${handoff.goal}\n`);
+  const web = isWebAop({ trigger: undefined, procedure: [handoff.goal, handoff.context] });
+
+  // Live Assist (`--safe`) is help the user did NOT ask for, proposed by a
+  // machine reading their screen. It runs with destructive commands denied at
+  // the permission layer and in its own workspace — deliberately unlike the
+  // user-initiated Ask handoff below, which keeps acceptEdits. Do not merge.
+  if (flags.safe) {
+    const workspace = assistWorkspace(id);
+    const settingsPath = writeSafeSettings();
+    const args = buildAssistArgs(buildLiveAssistPrompt(
+      { goal: handoff.goal, offer: handoff.goal, confidence: 'medium', goalKey: '', handoff },
+      workspace,
+    ), { web, settingsPath });
+    console.log(`Safe mode: destructive commands are blocked; working in ${workspace}\n`);
+    const child = spawn('claude', args, { stdio: 'inherit', cwd: workspace });
+    await new Promise<void>((resolve) => child.on('close', () => resolve()));
+    return;
+  }
+
   const args: string[] = [];
-  if (isWebAop({ trigger: undefined, procedure: [handoff.goal, handoff.context] })) args.push('--chrome');
+  if (web) args.push('--chrome');
   args.push('--permission-mode', 'acceptEdits');
   args.push(buildAssistPrompt(handoff));
   const child = spawn('claude', args, { stdio: 'inherit' });

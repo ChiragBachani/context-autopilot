@@ -768,6 +768,19 @@ export interface AmbientState {
   autoRecapDay?: string;
   /** Step-key sequences of dismissed candidates — suppress lookalikes. */
   dismissedSignatures: string[][];
+  /** ISO timestamp of the last Live Assist offer (global cadence throttle). */
+  lastAssistOfferAt?: string;
+  /** Per-day Live Assist offer count, so a bad day can't turn into a stream. */
+  assistOffers?: { day: string; count: number };
+  /** Goal keys already offered — dedupe on the GOAL, not the situation, so a
+   * long task's shifting signals don't re-offer the same help. */
+  offeredGoalKeys: string[];
+  /** Situation/goal keys the user dismissed — suppressed for the rest of the day. */
+  declinedAssistKeys: string[];
+  /** Day the declined list applies to (cleared when the day rolls over). */
+  declinedAssistDay?: string;
+  /** situation key → distinct days seen, for graduation into a standing AOP. */
+  situationDays: Record<string, string[]>;
 }
 
 function statePath(): string {
@@ -785,9 +798,24 @@ export function loadAmbientState(): AmbientState {
       lastAutoDistillAt: raw.lastAutoDistillAt,
       autoRecapDay: raw.autoRecapDay,
       dismissedSignatures: raw.dismissedSignatures ?? [],
+      lastAssistOfferAt: raw.lastAssistOfferAt,
+      assistOffers: raw.assistOffers,
+      offeredGoalKeys: raw.offeredGoalKeys ?? [],
+      declinedAssistKeys: raw.declinedAssistKeys ?? [],
+      declinedAssistDay: raw.declinedAssistDay,
+      situationDays: raw.situationDays ?? {},
     };
   } catch {
-    return { version: 1, rejectedTitles: [], dontAskSlugs: [], lastPrompted: {}, dismissedSignatures: [] };
+    return {
+      version: 1,
+      rejectedTitles: [],
+      dontAskSlugs: [],
+      lastPrompted: {},
+      dismissedSignatures: [],
+      offeredGoalKeys: [],
+      declinedAssistKeys: [],
+      situationDays: {},
+    };
   }
 }
 

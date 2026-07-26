@@ -19,7 +19,7 @@ import {
   readDay,
   screenshotStats,
 } from './records.js';
-import { launchAopInTerminal, launchCliInTerminal, observerAlive } from './observer.js';
+import { launchAopInTerminal, launchCliInTerminal, observerAlive, readOffers } from './observer.js';
 import { askActivity, loadHandoff } from './ask.js';
 import { readRuns, syncAopSchedule } from './runner.js';
 import { searchHistory } from './search.js';
@@ -31,8 +31,10 @@ import {
   buildEpisodes,
   createAop,
   deleteAop,
+  loadAmbientState,
   loadAops,
   loadWorkflowProposals,
+  saveAmbientState,
   setAopEnabled,
   updateAop,
   type AopPatch,
@@ -153,6 +155,39 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       if (!loadHandoff(id)) return json(res, { error: 'handoff not found' }, 404);
       launchCliInTerminal(['assist', id]);
       return json(res, { launched: true });
+    }
+    // Live Assist: offers the observer made while the user was mid-task.
+    if (req.method === 'GET' && path === '/api/assist/pending') {
+      const state = loadAmbientState();
+      const today = dayKey();
+      const declined = state.declinedAssistDay === today ? state.declinedAssistKeys : [];
+      const pending = readOffers()
+        .filter((o) => o.at.slice(0, 10) === today && !declined.includes(o.goalKey))
+        .slice(-3)
+        .reverse();
+      return json(res, { offers: pending });
+    }
+    if (req.method === 'POST' && path === '/api/assist/accept') {
+      const body = await readBody(req);
+      const id = String(body.id ?? '');
+      if (!loadHandoff(id)) return json(res, { error: 'offer not found' }, 404);
+      // --safe: destructive commands denied at the permission layer. This help
+      // was proposed by the machine, not requested — it gets the locked path.
+      launchCliInTerminal(['assist', id, '--safe']);
+      return json(res, { launched: true });
+    }
+    if (req.method === 'POST' && path === '/api/assist/dismiss') {
+      const body = await readBody(req);
+      const goalKey = String(body.goalKey ?? '');
+      const state = loadAmbientState();
+      const today = dayKey();
+      if (state.declinedAssistDay !== today) {
+        state.declinedAssistDay = today;
+        state.declinedAssistKeys = [];
+      }
+      if (goalKey && !state.declinedAssistKeys.includes(goalKey)) state.declinedAssistKeys.push(goalKey);
+      saveAmbientState(state);
+      return json(res, { dismissed: true });
     }
     if (req.method === 'GET' && path === '/api/search') {
       const q = url.searchParams.get('q') ?? '';
@@ -503,6 +538,7 @@ export const PAGE = `<!doctype html>
   </nav>
 
   <section id="tab-today">
+    <div id="assist-offers"></div>
     <div class="stats">
       <div class="stat"><b id="s-moments">–</b><span>moments captured</span></div>
       <div class="stat"><b id="s-minutes">–</b><span>minutes observed</span></div>
@@ -622,6 +658,7 @@ document.querySelectorAll('nav button').forEach(function(btn){
 });
 
 function refreshStatus(){
+  loadAssistOffers();
   api('/api/status').then(function(s){
     status = s;
     document.getElementById('demobanner').style.display = s.demo ? 'block' : 'none';
@@ -891,6 +928,42 @@ function workOn(btn, id){
   api('/api/ask/handoff', {id: id}).then(function(r){
     btn.textContent = r.error ? ('Could not launch: '+r.error) : 'Session opened in Terminal ✓';
   }).catch(function(){ btn.textContent = 'Could not launch.'; });
+}
+
+// Live Assist offers: help proposed while the user was mid-task.
+function loadAssistOffers(){
+  api('/api/assist/pending').then(function(r){
+    var host = document.getElementById('assist-offers');
+    if (!host) return;
+    var offers = (r && r.offers) || [];
+    if (!offers.length) { host.innerHTML = ''; return; }
+    host.innerHTML = offers.map(function(o){
+      var facts = (o.facts||[]).slice(0,3).map(function(f){
+        return '<div class="muted" style="font-size:12px">• '+esc(f)+'</div>';
+      }).join('');
+      return '<div class="card summary" style="border-color:#00c8a0">'
+        + '<div class="summary-head"><h3>💡 '+esc(o.goal)+'</h3>'
+        + '<span class="muted" style="font-size:12px">'+esc(o.confidence)+' confidence</span></div>'
+        + '<div style="margin:6px 0 10px">'+esc(o.offer)+'</div>'
+        + facts
+        + '<div class="handoff" style="margin-top:10px">'
+        + '<button class="act run" onclick="acceptOffer(this, \\''+esc(o.id)+'\\')">🚀 Work on this</button> '
+        + '<button class="act ghost" onclick="dismissOffer(this, \\''+esc(o.goalKey)+'\\')">Not now</button>'
+        + '</div></div>';
+    }).join('');
+  }).catch(function(){});
+}
+
+function acceptOffer(btn, id){
+  btn.disabled = true; btn.textContent = 'Opening a Claude session…';
+  api('/api/assist/accept', {id: id}).then(function(r){
+    btn.textContent = r.error ? ('Could not launch: '+r.error) : 'Session opened in Terminal ✓';
+  }).catch(function(){ btn.textContent = 'Could not launch.'; });
+}
+
+function dismissOffer(btn, goalKey){
+  btn.disabled = true;
+  api('/api/assist/dismiss', {goalKey: goalKey}).then(function(){ loadAssistOffers(); }).catch(function(){});
 }
 
 function mineNow(){
