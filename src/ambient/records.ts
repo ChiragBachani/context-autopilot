@@ -201,8 +201,13 @@ export function readAllDays(): Map<string, ActivityRecord[]> {
   return byDay;
 }
 
-/** Days whose screenshots have outlived the retention window. */
+/**
+ * Days whose screenshots have outlived the retention window.
+ * retentionDays <= 0 means "keep forever" — returns nothing, so no caller can
+ * delete the archive. Past days stay re-mineable as the algorithms improve.
+ */
 export function daysPastRetention(retentionDays: number, now: Date = new Date()): string[] {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) return [];
   const cutoff = dayKey(new Date(now.getTime() - retentionDays * 86_400_000));
   return listDays().filter((day) => day < cutoff);
 }

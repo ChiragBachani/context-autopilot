@@ -242,6 +242,16 @@ test('retention flags only days older than the window', () => {
   assert.deepEqual(old, ['2026-06-01']);
 });
 
+test('retentionDays 0 keeps every screenshot forever', () => {
+  // The default while mining logic is still evolving: past days must stay
+  // re-mineable, so nothing may be flagged for deletion at any age.
+  appendRecord(record({ timestamp: '2025-01-01T09:00:00.000Z' }));
+  appendRecord(record({ timestamp: '2026-06-01T09:00:00.000Z' }));
+  assert.deepEqual(daysPastRetention(0, new Date('2026-07-08T00:00:00Z')), []);
+  assert.deepEqual(daysPastRetention(-1, new Date('2026-07-08T00:00:00Z')), []);
+  assert.equal(DEFAULT_CONFIG.retentionDays, 0, 'ships keeping everything');
+});
+
 test('observed-minutes estimate ignores long gaps', () => {
   const records = [
     record({ timestamp: '2026-07-08T09:00:00.000Z' }),

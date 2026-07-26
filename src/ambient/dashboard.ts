@@ -646,7 +646,7 @@ function refreshStatus(){
       : 'OFF — nothing is captured until you turn it back on. This survives restarts.';
     document.getElementById('textonly').checked = s.textOnly;
   document.getElementById('clipboard').checked = s.clipboard;
-    document.getElementById('shotstats').textContent = s.screenshots.count + ' screenshot(s) on disk (' + (s.screenshots.bytes/1048576).toFixed(1) + ' MB), auto-deleted after ' + s.retentionDays + ' days';
+    document.getElementById('shotstats').textContent = s.screenshots.count + ' screenshot(s) on disk (' + (s.screenshots.bytes/1048576).toFixed(1) + ' MB)' + (s.retentionDays > 0 ? ', auto-deleted after ' + s.retentionDays + ' days' : ' — kept indefinitely (no auto-delete)');
     if (!blocklistDirty) {
       document.getElementById('blockapps').value = s.blocklistApps.join('\\n');
       document.getElementById('blocktitles').value = s.blocklistTitleKeywords.join('\\n');

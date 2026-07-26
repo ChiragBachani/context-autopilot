@@ -20,7 +20,12 @@ export interface AmbientConfig {
   pausedUntil?: string;
   /** Delete each screenshot immediately after OCR (keep only text records). */
   textOnly: boolean;
-  /** Screenshots older than this are deleted (text records are kept). */
+  /**
+   * Screenshots older than this are deleted (text records are always kept).
+   * 0 = keep screenshots forever. Default while the product's mining logic is
+   * still being developed: retain everything, so past days can be re-mined
+   * with improved algorithms instead of being lost to a rolling window.
+   */
   retentionDays: number;
   dashboardPort: number;
   /** Auto-distill: wait at least this long between runs (0 disables). */
@@ -41,7 +46,7 @@ export const DEFAULT_CONFIG: AmbientConfig = {
   version: 1,
   enabled: true,
   textOnly: false,
-  retentionDays: 14,
+  retentionDays: 0, // keep everything (see AmbientConfig.retentionDays)
   dashboardPort: 4780,
   // Mine for patterns every couple of hours once enough new moments exist —
   // waiting for a nightly run makes day one feel dead.
