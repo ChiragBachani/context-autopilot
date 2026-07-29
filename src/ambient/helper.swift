@@ -57,6 +57,22 @@ func runPerm(_ what: String) {
   case "screen":
     // Preflight never prompts; it just reports the current grant.
     print(CGPreflightScreenCaptureAccess() ? "granted" : "denied")
+  case "screen-request":
+    // Preflight ALONE is a dead end: if the grant is missing (or was reset,
+    // or the ad-hoc-signed binary changed and invalidated it), checking
+    // forever reports "denied" and nothing ever asks the user. macOS only
+    // shows the Screen Recording prompt when something *requests* access, so
+    // the observer must request — otherwise a reset permission can never be
+    // re-granted for the app and it silently stops capturing.
+    if CGPreflightScreenCaptureAccess() {
+      print("granted")
+    } else {
+      // Fires the system prompt (once per app identity). Returns the state
+      // known right now — the user's answer may land after we exit, so the
+      // caller re-checks rather than trusting this return value.
+      let ok = CGRequestScreenCaptureAccess()
+      print(ok ? "granted" : "requested")
+    }
   default:
     fail("unknown permission: \(what)")
   }

@@ -104,6 +104,21 @@ export function screenPermission(): 'granted' | 'denied' | 'unknown' {
   return out.trim() === 'granted' ? 'granted' : 'denied';
 }
 
+/**
+ * Ask macOS for Screen Recording, showing the system prompt when the grant is
+ * missing. Checking alone can never recover from a revoked/invalidated grant —
+ * only a request makes the OS ask — so the observer calls this before giving up.
+ * 'requested' means the prompt was raised and the answer will arrive later.
+ */
+export function requestScreenPermission(): 'granted' | 'requested' | 'denied' | 'unknown' {
+  const out = run(['perm', 'screen-request'], 30_000);
+  if (out === null) return 'unknown';
+  const value = out.trim();
+  if (value === 'granted') return 'granted';
+  if (value === 'requested') return 'requested';
+  return 'denied';
+}
+
 /** Render a fake-app screenshot (title bar + text lines) for tests and the demo. */
 export function renderFixture(outPath: string, title: string, lines: string[]): boolean {
   return run(['fixture', outPath, title, ...lines], 30_000) !== null;

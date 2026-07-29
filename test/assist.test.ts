@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, test } from 'node:test';
@@ -231,5 +231,25 @@ test('offers are disabled by config', () => {
       now,
     }),
     false,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Permission recovery — a grant that vanishes must be recoverable
+
+test('the helper exposes a REQUEST path, not just a check', async () => {
+  // Checking alone is a dead end: after `tccutil reset` (or an ad-hoc-signed
+  // rebuild that invalidates the grant) preflight reports denied forever and
+  // macOS never asks, so capture silently stays dead. Only a request prompts.
+  const helper = await import('../dist/ambient/helper.js');
+  assert.equal(typeof helper.requestScreenPermission, 'function');
+  assert.equal(typeof helper.screenPermission, 'function');
+  const swift = readFileSync(new URL('../src/ambient/helper.swift', import.meta.url), 'utf8');
+  assert.ok(swift.includes('CGRequestScreenCaptureAccess'), 'the request API must be wired in Swift');
+  assert.ok(swift.includes('screen-request'), 'the request subcommand must exist');
+  const observer = readFileSync(new URL('../src/ambient/observer.ts', import.meta.url), 'utf8');
+  assert.ok(
+    observer.includes('requestScreenPermission()'),
+    'permissionDoctor must request before giving up, or a reset grant can never be restored',
   );
 });
