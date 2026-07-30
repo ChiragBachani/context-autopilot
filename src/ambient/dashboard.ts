@@ -20,6 +20,7 @@ import {
   screenshotStats,
 } from './records.js';
 import { launchAopInTerminal, launchCliInTerminal, observerAlive, readOffers } from './observer.js';
+import { clearOfferOutcome, loadOfferOutcomes, recordOfferOutcome } from './outcomes.js';
 import { askActivity, loadHandoff, saveHandoff } from './ask.js';
 import {
   applyWorkflowRefinement,
@@ -200,7 +201,38 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       // --safe: destructive commands denied at the permission layer. This help
       // was proposed by the machine, not requested — it gets the locked path.
       launchCliInTerminal(['assist', runId, '--safe']);
+      recordOfferOutcome(id, { status: 'accepted', at: new Date().toISOString(), refined: Boolean(refinement) });
       return json(res, { launched: true, refined: Boolean(refinement) });
+    }
+    // Every suggestion ever made, with what became of it. A skipped suggestion
+    // is retrievable, not lost — "not now" rarely means "never".
+    if (req.method === 'GET' && path === '/api/assist/history') {
+      const outcomes = loadOfferOutcomes();
+      const refinements = loadOfferRefinements();
+      const history = readOffers()
+        .map((o) => {
+          const refined = refinements[o.id];
+          return {
+            ...o,
+            // Show the shaped version when the user refined it.
+            goal: refined?.goal ?? o.goal,
+            offer: refined?.offer ?? o.offer,
+            wasRefined: Boolean(refined),
+            chat: refined?.chat ?? [],
+            status: outcomes[o.id]?.status ?? 'open',
+            decidedAt: outcomes[o.id]?.at,
+          };
+        })
+        .reverse();
+      return json(res, { history });
+    }
+    // Bring a skipped suggestion back to life.
+    if (req.method === 'POST' && path === '/api/assist/reopen') {
+      const body = await readBody(req);
+      const id = String(body.id ?? '');
+      if (!readOffers().some((o) => o.id === id)) return json(res, { error: 'offer not found' }, 404);
+      clearOfferOutcome(id);
+      return json(res, { reopened: true });
     }
     // "Close, but…" — talk the offer into shape instead of rejecting it.
     if (req.method === 'POST' && path === '/api/assist/refine') {
@@ -232,7 +264,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
     if (req.method === 'POST' && path === '/api/assist/dismiss') {
       const body = await readBody(req);
-      const goalKey = String(body.goalKey ?? '');
+      const id = String(body.id ?? '');
+      // goalKey drives day-scoped re-offer suppression; id records the outcome
+      // permanently so the Suggestions tab can show (and revive) what was skipped.
+      const goalKey = String(body.goalKey ?? '') || readOffers().find((o) => o.id === id)?.goalKey || '';
       const state = loadAmbientState();
       const today = dayKey();
       if (state.declinedAssistDay !== today) {
@@ -241,6 +276,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
       if (goalKey && !state.declinedAssistKeys.includes(goalKey)) state.declinedAssistKeys.push(goalKey);
       saveAmbientState(state);
+      if (id) recordOfferOutcome(id, { status: 'dismissed', at: new Date().toISOString() });
       return json(res, { dismissed: true });
     }
     if (req.method === 'GET' && path === '/api/search') {
@@ -615,6 +651,7 @@ export const PAGE = `<!doctype html>
     <button data-tab="activity">Activity</button>
     <button data-tab="ask">Ask<span class="badge" id="askbadge" style="display:none"></span></button>
     <button data-tab="patterns">Patterns<span class="badge" id="pendingbadge" style="display:none"></span></button>
+    <button data-tab="suggestions">Suggestions<span class="badge" id="sugbadge" style="display:none"></span></button>
     <button data-tab="autos">Automations</button>
     <button data-tab="controls">Controls</button>
   </nav>
@@ -670,6 +707,12 @@ export const PAGE = `<!doctype html>
       <button class="act approve" id="minebtn" onclick="mineNow()">⛏ Mine now</button>
     </div>
     <div id="proposals"></div>
+  </section>
+  <section id="tab-suggestions" style="display:none">
+    <div class="minebar">
+      <span class="muted" id="sug-hint">Everything Autopilot has ever offered to do, and what became of it. Nothing is lost — reopen anything you skipped.</span>
+    </div>
+    <div id="suggestion-history"></div>
   </section>
   <section id="tab-ask" style="display:none">
     <div class="minebar">
@@ -728,13 +771,17 @@ document.querySelectorAll('nav button').forEach(function(btn){
     location.hash = btn.dataset.tab; // deep-linkable tabs (e.g. /#activity)
     document.querySelectorAll('nav button').forEach(function(b){ b.classList.remove('active'); });
     btn.classList.add('active');
-    ['today','activity','ask','patterns','autos','controls'].forEach(function(t){
-      document.getElementById('tab-'+t).style.display = (btn.dataset.tab===t) ? '' : 'none';
+    // Derive the section list from the nav itself — a hardcoded list silently
+    // hid a new tab (its section stayed display:none while its content rendered).
+    document.querySelectorAll('nav button').forEach(function(b){
+      var sec = document.getElementById('tab-'+b.dataset.tab);
+      if (sec) sec.style.display = (btn.dataset.tab===b.dataset.tab) ? '' : 'none';
     });
     if (btn.dataset.tab==='today') refreshSummary();
     if (btn.dataset.tab==='activity') loadEpisodes();
     if (btn.dataset.tab==='ask') renderAsk();
     if (btn.dataset.tab==='patterns') loadProposals();
+    if (btn.dataset.tab==='suggestions') loadSuggestionHistory();
     if (btn.dataset.tab==='autos') loadAops();
   };
 });
@@ -1046,9 +1093,59 @@ function acceptOffer(btn, id){
   }).catch(function(){ btn.textContent = 'Could not launch.'; });
 }
 
-function dismissOffer(btn, goalKey){
+function dismissOffer(btn, goalKey, id){
   btn.disabled = true;
-  api('/api/assist/dismiss', {goalKey: goalKey}).then(function(){ loadAssistOffers(); }).catch(function(){});
+  api('/api/assist/dismiss', {goalKey: goalKey, id: id}).then(function(){ loadAssistOffers(); }).catch(function(){});
+}
+
+// --- Suggestion history: the track record ----------------------------------
+
+function loadSuggestionHistory(){
+  api('/api/assist/history').then(function(r){
+    var el = document.getElementById('suggestion-history');
+    var items = (r && r.history) || [];
+    var open = items.filter(function(i){ return i.status==='open'; }).length;
+    var badge = document.getElementById('sugbadge');
+    if (badge) { badge.textContent = open; badge.style.display = open ? 'inline-block' : 'none'; }
+    if (!items.length) {
+      el.innerHTML = '<div class="card"><div class="empty">No suggestions yet. Autopilot offers help when it notices you repeating something — keep working and check back.</div></div>';
+      return;
+    }
+    var accepted = items.filter(function(i){ return i.status==='accepted'; }).length;
+    var dismissed = items.filter(function(i){ return i.status==='dismissed'; }).length;
+    var summary = '<div class="card"><b>'+items.length+'</b> suggestion(s) so far — '
+      + '<span style="color:#00c8a0">'+accepted+' run</span>, '+dismissed+' skipped, '+open+' still open.</div>';
+    el.innerHTML = summary + items.map(function(i){
+      var when = new Date(i.at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+      var pill = i.status==='accepted' ? '<span class="conf high">run</span>'
+               : i.status==='dismissed' ? '<span class="muted">skipped</span>'
+               : '<span class="conf medium">open</span>';
+      var facts = (i.facts||[]).slice(0,3).map(function(f){
+        return '<div class="muted" style="font-size:12px">• '+esc(f)+'</div>';
+      }).join('');
+      var acts = i.status==='open'
+        ? '<button class="act run" onclick="acceptOffer(this, \\''+esc(i.id)+'\\')">🚀 Work on this</button> '
+          + '<button class="act ghost" onclick="toggleRefine(\\'off-'+esc(i.id)+'\\')">✏️ Refine</button> '
+          + '<button class="act ghost" onclick="dismissOffer(this, \\''+esc(i.goalKey)+'\\', \\''+esc(i.id)+'\\')">Not now</button>'
+        : '<button class="act ghost" onclick="reopenOffer(this, \\''+esc(i.id)+'\\')">↩︎ Bring this back</button>'
+          + (i.status==='accepted' ? ' <button class="act run" onclick="acceptOffer(this, \\''+esc(i.id)+'\\')">🚀 Run again</button>' : '');
+      return '<div class="card"><div class="summary-head"><h3 style="font-size:15px">'+esc(i.goal)+'</h3>'
+        + '<span class="muted" style="font-size:12px">'+esc(when)+' '+pill+'</span></div>'
+        + '<div style="margin:6px 0 8px;font-size:14px">'+esc(i.offer)+'</div>'
+        + (i.wasRefined ? '<div class="muted" style="font-size:12px">✏️ you refined this</div>' : '')
+        + facts
+        + '<div class="handoff" style="margin-top:10px">'+acts+'</div>'
+        + refinePanel('off-'+esc(i.id), 'refineOffer(\\''+esc(i.id)+'\\')')
+        + '</div>';
+    }).join('');
+  }).catch(function(){});
+}
+
+function reopenOffer(btn, id){
+  btn.disabled = true; btn.textContent = 'Reopening…';
+  api('/api/assist/reopen', {id: id}).then(function(){
+    loadSuggestionHistory(); loadAssistOffers();
+  }).catch(function(){ btn.disabled = false; });
 }
 
 // --- Refinement: "close, but…" instead of rejecting -------------------------
@@ -1360,6 +1457,10 @@ document.getElementById('clipboard').addEventListener('change', function(e){
   if (btn) btn.click();
 })();
 refreshStatus(); refreshTimeline(); refreshSummary(); loadRecap(); loadDigest();
+// Once at startup so the Suggestions badge is visible without opening the tab.
+// Deliberately NOT in the 4s poll — re-rendering would collapse an open refine
+// chat mid-sentence.
+loadSuggestionHistory();
 setInterval(refreshStatus, 4000);
 setInterval(refreshTimeline, 4000);
 setInterval(refreshSummary, 8000);
