@@ -28,6 +28,51 @@ let configPath = ambientDir + "/config.json"
 let heartbeatPath = ambientDir + "/heartbeat"
 let pidPath = ambientDir + "/menubar.pid"
 let showWindowFlagPath = ambientDir + "/show-window"
+let offersPath = ambientDir + "/offers.jsonl"
+let statePath = ambientDir + "/state.json"
+
+/// A Live Assist offer waiting for the user.
+struct PendingOffer {
+  let id: String
+  let goal: String
+  let offer: String
+}
+
+/// Local calendar day for an ISO timestamp — offers are stamped in UTC, so
+/// comparing raw date strings hides anything made after ~8pm local.
+private func isToday(_ iso: String) -> Bool {
+  let fmt = ISO8601DateFormatter()
+  fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  let date = fmt.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+  guard let date else { return false }
+  return Calendar.current.isDateInToday(date)
+}
+
+/// The newest offer from today that the user hasn't dismissed.
+func newestPendingOffer() -> PendingOffer? {
+  guard let text = try? String(contentsOfFile: offersPath, encoding: .utf8) else { return nil }
+  var declined: Set<String> = []
+  if let data = FileManager.default.contents(atPath: statePath),
+     let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+    let day = obj["declinedAssistDay"] as? String
+    let today = DateFormatter()
+    today.dateFormat = "yyyy-MM-dd"
+    if day == today.string(from: Date()), let keys = obj["declinedAssistKeys"] as? [String] {
+      declined = Set(keys)
+    }
+  }
+  for line in text.split(separator: "\n").reversed() {
+    guard let data = line.data(using: .utf8),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let at = obj["at"] as? String, isToday(at),
+          let id = obj["id"] as? String,
+          let goal = obj["goal"] as? String,
+          let offer = obj["offer"] as? String else { continue }
+    if let key = obj["goalKey"] as? String, declined.contains(key) { continue }
+    return PendingOffer(id: id, goal: goal, offer: offer)
+  }
+  return nil
+}
 
 enum ObserveState { case observing, paused, off }
 
@@ -211,12 +256,16 @@ func installMainMenu() {
 
 // ---------------------------------------------------------------------------
 
-final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSUserNotificationCenterDelegate {
   var item: NSStatusItem!
   let dashboard = DashboardWindow()
   /// Self-healing throttle: don't hammer the start script if it keeps failing
   /// (e.g. permissions revoked) — one attempt per 30s is plenty.
   var lastReviveAttempt = Date.distantPast
+  /// The Live Assist offer currently waiting (drives the icon badge + menu).
+  var pendingOffer: PendingOffer?
+  /// Last offer we posted a banner for, so a pending offer notifies once.
+  var lastNotifiedOfferId: String?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -240,6 +289,7 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
       self?.consumeShowWindowFlag()
       self?.selfHeal()
       self?.refreshIcon()
+      self?.checkForOffers()
     }
     // Opening the app should SHOW the app. Give the dashboard a beat to come
     // up (the daemon may have just been revived), then present the window.
@@ -261,6 +311,50 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     showWindow()
   }
 
+  /// Surface a new Live Assist offer from THIS app.
+  ///
+  /// The observer used to post these through osascript, which macOS attributes
+  /// to Script Editor — so the alert looked like it came from a scripting tool,
+  /// its text was clipped, and clicking it opened Script Editor's file dialog
+  /// instead of the offer. Posting from the real bundle fixes the identity, and
+  /// the badge + menu item mean the offer is reachable even if the banner is
+  /// missed entirely.
+  func checkForOffers() {
+    guard let offer = newestPendingOffer() else {
+      if pendingOffer != nil { pendingOffer = nil; refreshIcon() }
+      return
+    }
+    let isNew = offer.id != pendingOffer?.id
+    pendingOffer = offer
+    guard isNew, offer.id != lastNotifiedOfferId else { return }
+    lastNotifiedOfferId = offer.id
+    refreshIcon()
+    postOfferNotification(offer)
+  }
+
+  private func postOfferNotification(_ offer: PendingOffer) {
+    let note = NSUserNotification()
+    note.title = "Context Autopilot can help"
+    // Subtitle carries the goal; the body carries the offer. Banners clip long
+    // text, so the menu bar and dashboard hold the full version.
+    note.subtitle = offer.goal
+    note.informativeText = offer.offer
+    note.hasActionButton = true
+    note.actionButtonTitle = "Review"
+    note.soundName = nil
+    NSUserNotificationCenter.default.delegate = self
+    NSUserNotificationCenter.default.deliver(note)
+  }
+
+  func userNotificationCenter(_ center: NSUserNotificationCenter, didActivate note: NSUserNotification) {
+    // Any click — banner or action button — opens the app on the offer.
+    showWindow()
+  }
+
+  func userNotificationCenter(_ center: NSUserNotificationCenter, shouldPresent note: NSUserNotification) -> Bool {
+    true // show even when we're the frontmost app
+  }
+
   func refreshIcon() {
     guard let button = item.button else { return }
     let state = currentState()
@@ -270,6 +364,15 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     case .observing: symbol = "eye.fill"; color = .systemGreen
     case .paused: symbol = "pause.circle.fill"; color = .systemYellow
     case .off: symbol = "eye.slash"; color = .systemGray
+    }
+    // A waiting offer overrides the state colour: the icon is the one thing
+    // always on screen, so it's where "something needs you" belongs.
+    if pendingOffer != nil {
+      let bulb = NSImage(systemSymbolName: "lightbulb.fill", accessibilityDescription: "Context Autopilot — help available")
+      bulb?.isTemplate = true
+      button.image = bulb
+      button.contentTintColor = .systemYellow
+      return
     }
     let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Context Autopilot")
     image?.isTemplate = true
@@ -300,6 +403,21 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.addItem(head)
     menu.addItem(.separator())
 
+    // A waiting offer goes at the top, with the full text a banner can't fit.
+    if let offer = pendingOffer {
+      let title = NSMenuItem(title: "💡 \(clip(offer.goal, 60))", action: nil, keyEquivalent: "")
+      title.isEnabled = false
+      menu.addItem(title)
+      for line in wrap(offer.offer, width: 58) {
+        let detail = NSMenuItem(title: "   \(line)", action: nil, keyEquivalent: "")
+        detail.isEnabled = false
+        menu.addItem(detail)
+      }
+      add(menu, "   Review and accept →", #selector(openWindow))
+      add(menu, "   Not now", #selector(dismissOffer))
+      menu.addItem(.separator())
+    }
+
     if state == .off {
       add(menu, "Turn observation on", #selector(turnOn))
     } else {
@@ -311,6 +429,47 @@ final class MenuController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     add(menu, "Open in browser", #selector(openInBrowser))
     menu.addItem(.separator())
     add(menu, "Quit menu bar app", #selector(quitApp), key: "q")
+  }
+
+  private func clip(_ text: String, _ max: Int) -> String {
+    text.count <= max ? text : String(text.prefix(max - 1)) + "…"
+  }
+
+  /// Wrap on word boundaries so a long offer reads as a few menu lines.
+  private func wrap(_ text: String, width: Int) -> [String] {
+    var lines: [String] = []
+    var current = ""
+    for word in text.split(separator: " ") {
+      if current.isEmpty { current = String(word) }
+      else if current.count + 1 + word.count <= width { current += " " + word }
+      else { lines.append(current); current = String(word) }
+      if lines.count == 4 { break } // a menu is not a document
+    }
+    if !current.isEmpty && lines.count < 4 { lines.append(current) }
+    return lines
+  }
+
+  /// "Not now" from the menu bar — same suppression the dashboard button uses.
+  @objc func dismissOffer() {
+    guard let offer = pendingOffer else { return }
+    let port = (readConfig()["dashboardPort"] as? Int) ?? 4780
+    guard let url = URL(string: "http://127.0.0.1:\(port)/api/assist/dismiss") else { return }
+    var req = URLRequest(url: url)
+    req.httpMethod = "POST"
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    // The dashboard dismisses by goalKey; re-read it for this offer id.
+    var goalKey = ""
+    if let text = try? String(contentsOfFile: offersPath, encoding: .utf8) {
+      for line in text.split(separator: "\n").reversed() {
+        if let data = line.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           obj["id"] as? String == offer.id, let key = obj["goalKey"] as? String { goalKey = key; break }
+      }
+    }
+    req.httpBody = try? JSONSerialization.data(withJSONObject: ["goalKey": goalKey])
+    URLSession.shared.dataTask(with: req) { [weak self] _, _, _ in
+      DispatchQueue.main.async { self?.pendingOffer = nil; self?.refreshIcon() }
+    }.resume()
   }
 
   private func add(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") {

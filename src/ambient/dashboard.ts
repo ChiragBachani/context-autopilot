@@ -161,8 +161,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const state = loadAmbientState();
       const today = dayKey();
       const declined = state.declinedAssistDay === today ? state.declinedAssistKeys : [];
+      // Compare LOCAL days: `at` is UTC, so slicing its date string hid every
+      // offer made after ~8pm EDT (a 10:51pm offer is tomorrow in UTC). An
+      // offer the user was just notified about must never be invisible here.
       const pending = readOffers()
-        .filter((o) => o.at.slice(0, 10) === today && !declined.includes(o.goalKey))
+        .filter((o) => dayKey(new Date(o.at)) === today && !declined.includes(o.goalKey))
         .slice(-3)
         .reverse();
       return json(res, { offers: pending });
