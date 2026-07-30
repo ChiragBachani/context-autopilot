@@ -7,7 +7,7 @@ import { beforeEach, test } from 'node:test';
 import { corroborated, detectSituations, hasLongOperation } from '../dist/ambient/situations.js';
 import { alreadyOffered, goalKeyOf, parseAssistProposal, proposeAssist, sameGoal } from '../dist/ambient/assist.js';
 import { DESTRUCTIVE_DENY, buildAssistArgs } from '../dist/ambient/safety.js';
-import { probeablePath } from '../dist/ambient/probes.js';
+import { gatherProbes, probeablePath, storageRelevant } from '../dist/ambient/probes.js';
 import { recentWindow } from '../dist/ambient/recent.js';
 import { appendRecord, appendSegment } from '../dist/ambient/records.js';
 import { DEFAULT_CONFIG } from '../dist/ambient/config.js';
@@ -252,4 +252,41 @@ test('the helper exposes a REQUEST path, not just a check', async () => {
     observer.includes('requestScreenPermission()'),
     'permissionDoctor must request before giving up, or a reset grant can never be restored',
   );
+});
+
+// ---------------------------------------------------------------------------
+// Probe relevance — facts must match what the user is actually doing
+
+test('storage probes fire for disk work and stay quiet for research', () => {
+  const storageWork = [
+    { app: 'System Settings', title: 'Storage' },
+    { app: 'Finder', title: 'Copy' },
+  ];
+  assert.ok(storageRelevant(storageWork), 'Storage pane + Finder copy is disk work');
+
+  const research = [
+    { app: 'Google Chrome', title: 'Manhattan NY Apartments for Rent | StreetEasy' },
+    { app: 'Google Chrome', title: '(20+) NYC Sublets & Apartments | Facebook' },
+    { app: 'Claude', title: 'Claude' },
+  ];
+  assert.equal(storageRelevant(research), false, 'apartment hunting is not disk work');
+});
+
+test('a named mounted volume in a window title counts as disk work', () => {
+  assert.ok(storageRelevant([{ app: 'Finder', title: 'LaCie' }], ['LaCie']));
+  assert.equal(storageRelevant([{ app: 'Finder', title: 'Recents' }], ['LaCie']), false);
+});
+
+test('probe relevance ignores OCR text (the real false positive)', async () => {
+  // The bug: probes ran on an apartment-research offer because the OCR of the
+  // dashboard contained "free space on /" — our own probe output feeding back
+  // in. Only app + window title may drive the decision.
+  const signals = [{ app: 'Google Chrome', title: 'Context Autopilot — Ambient' }];
+  assert.equal(storageRelevant(signals), false);
+  assert.deepEqual(await gatherProbes({ signals }), [], 'no facts for a non-storage situation');
+});
+
+test('Finder alone is not enough — it is used for everything', () => {
+  assert.equal(storageRelevant([{ app: 'Finder', title: 'Documents' }]), false);
+  assert.ok(storageRelevant([{ app: 'Finder', title: 'Copying 429 items' }]));
 });

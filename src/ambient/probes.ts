@@ -80,12 +80,66 @@ export async function probeDirSizes(dir: string): Promise<ProbeFact[]> {
   return [{ label: `sizes under ${safe}`, value: out.replace(/\n/g, ' · ').slice(0, 400) }];
 }
 
+/** One observed moment, reduced to the fields worth matching on. */
+export interface ProbeSignal {
+  app: string;
+  title: string;
+}
+
 /**
- * Run the probes that make sense for a storage/file-shaped situation. Returns
- * whatever succeeded within the time budget — an empty list is fine.
+ * Does the evidence actually concern disk space, drives, or files?
+ *
+ * Probing unconditionally stapled "35Gi free of 460Gi" onto an apartment-
+ * research offer, where it read as a non-sequitur — the facts exist to make an
+ * offer concrete, so an irrelevant one is worse than none.
+ *
+ * Deliberately ignores OCR text and matches on app + window title only. OCR
+ * captures the whole screen (menu bars, sidebars, other windows), and the
+ * false positive that prompted this was the word "space" picked up from our own
+ * dashboard rendering "free space on /" — the probe output feeding itself.
+ * Loose tokens are out too: "drive" hits Google Drive, "GB" hits any spec page.
  */
-export async function gatherProbes(candidateDirs: string[] = []): Promise<ProbeFact[]> {
-  const dirs = candidateDirs.map(probeablePath).filter((d): d is string => Boolean(d)).slice(0, 3);
+export function storageRelevant(signals: ProbeSignal[], volumeNames: string[] = []): boolean {
+  const STORAGE_TITLE =
+    /\/Volumes\/|\b(storage|disk utility|time machine|backup|copying|archive utility|free up space)\b/i;
+  const FILE_OP = /\b(copy|copying|move to|duplicate|compress|extract|export \d+|import \d+)\b/i;
+  const FILE_APP = /^(finder|system settings|disk utility|daisydisk|time machine|image capture)$/i;
+  return signals.some(({ app, title }) => {
+    if (STORAGE_TITLE.test(title)) return true;
+    // A named volume in a window title is unambiguous: they're working a drive.
+    if (volumeNames.some((v) => v.length > 2 && title.toLowerCase().includes(v.toLowerCase()))) return true;
+    // Finder/Settings alone means nothing (Finder is used for everything) —
+    // it has to be paired with a file operation or a storage pane.
+    return FILE_APP.test(app.trim()) && FILE_OP.test(title);
+  });
+}
+
+export interface ProbeContext {
+  /** App + window title per observed moment (OCR deliberately excluded). */
+  signals: ProbeSignal[];
+  /** Absolute paths mentioned in the evidence, if any. */
+  candidateDirs?: string[];
+}
+
+/** Names of currently mounted volumes, for precise title matching. */
+export async function mountedVolumeNames(): Promise<string[]> {
+  const out = await run('ls', ['/Volumes']);
+  if (!out) return [];
+  return out.split('\n').map((s) => s.trim()).filter((s) => s && s !== 'Macintosh HD');
+}
+
+/**
+ * Run only the probes the situation warrants. Returns whatever succeeded within
+ * the time budget — an empty list is a perfectly good answer, and better than
+ * facts that have nothing to do with what the user is doing.
+ */
+export async function gatherProbes(context: ProbeContext): Promise<ProbeFact[]> {
+  const volumes = await mountedVolumeNames();
+  if (!storageRelevant(context.signals, volumes)) return [];
+  const dirs = (context.candidateDirs ?? [])
+    .map(probeablePath)
+    .filter((d): d is string => Boolean(d))
+    .slice(0, 3);
   const results = await Promise.all([
     probeDisk(),
     probeVolumes(),
