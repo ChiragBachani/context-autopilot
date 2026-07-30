@@ -20,7 +20,17 @@ import {
   screenshotStats,
 } from './records.js';
 import { launchAopInTerminal, launchCliInTerminal, observerAlive, readOffers } from './observer.js';
-import { askActivity, loadHandoff } from './ask.js';
+import { askActivity, loadHandoff, saveHandoff } from './ask.js';
+import {
+  applyWorkflowRefinement,
+  loadOfferRefinements,
+  refineOffer,
+  refineWorkflow,
+  saveOfferRefinement,
+  type OfferDraft,
+  type RefineTurn,
+  type WorkflowDraft,
+} from './refine.js';
 import { readRuns, syncAopSchedule } from './runner.js';
 import { searchHistory } from './search.js';
 import { generateAndSaveRecap, loadRecap, summarizeDayFromDisk } from './summarize.js';
@@ -35,6 +45,7 @@ import {
   loadAops,
   loadWorkflowProposals,
   saveAmbientState,
+  saveWorkflowProposals,
   setAopEnabled,
   updateAop,
   type AopPatch,
@@ -164,20 +175,60 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       // Compare LOCAL days: `at` is UTC, so slicing its date string hid every
       // offer made after ~8pm EDT (a 10:51pm offer is tomorrow in UTC). An
       // offer the user was just notified about must never be invisible here.
+      const refinements = loadOfferRefinements();
       const pending = readOffers()
         .filter((o) => dayKey(new Date(o.at)) === today && !declined.includes(o.goalKey))
         .slice(-3)
-        .reverse();
+        .reverse()
+        // Show what the user shaped, not the original guess — otherwise
+        // refining appears to do nothing and they lose trust in the loop.
+        .map((o) => {
+          const r = refinements[o.id];
+          return r ? { ...o, goal: r.goal, offer: r.offer, refined: true, chat: r.chat } : o;
+        });
       return json(res, { offers: pending });
     }
     if (req.method === 'POST' && path === '/api/assist/accept') {
       const body = await readBody(req);
       const id = String(body.id ?? '');
       if (!loadHandoff(id)) return json(res, { error: 'offer not found' }, 404);
+      // A refined offer runs what the user shaped, not the original guess.
+      const refinement = loadOfferRefinements()[id];
+      const runId = refinement
+        ? saveHandoff({ goal: refinement.handoffGoal, context: refinement.handoffContext })
+        : id;
       // --safe: destructive commands denied at the permission layer. This help
       // was proposed by the machine, not requested — it gets the locked path.
-      launchCliInTerminal(['assist', id, '--safe']);
-      return json(res, { launched: true });
+      launchCliInTerminal(['assist', runId, '--safe']);
+      return json(res, { launched: true, refined: Boolean(refinement) });
+    }
+    // "Close, but…" — talk the offer into shape instead of rejecting it.
+    if (req.method === 'POST' && path === '/api/assist/refine') {
+      const body = await readBody(req);
+      const id = String(body.id ?? '');
+      const message = String(body.message ?? '').trim();
+      if (!message) return json(res, { error: 'say what to change' }, 400);
+      const offer = readOffers().find((o) => o.id === id);
+      if (!offer) return json(res, { error: 'offer not found' }, 404);
+      const existing = loadOfferRefinements()[id];
+      const handoff = loadHandoff(id);
+      const draft: OfferDraft = {
+        kind: 'offer',
+        goal: existing?.goal ?? offer.goal,
+        offer: existing?.offer ?? offer.offer,
+        handoffGoal: existing?.handoffGoal ?? handoff?.goal ?? offer.goal,
+        handoffContext: existing?.handoffContext ?? handoff?.context ?? '',
+      };
+      const chat = existing?.chat ?? [];
+      try {
+        const refined = await refineOffer(draft, chat, message);
+        if (!refined) return json(res, { error: 'could not parse the revision — try rewording' }, 502);
+        const nextChat: RefineTurn[] = [...chat, { role: 'user', text: message }, { role: 'assistant', text: refined.reply }];
+        saveOfferRefinement(id, { ...refined, chat: nextChat });
+        return json(res, { offer: { ...offer, goal: refined.goal, offer: refined.offer }, reply: refined.reply, chat: nextChat });
+      } catch (err) {
+        return json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
+      }
     }
     if (req.method === 'POST' && path === '/api/assist/dismiss') {
       const body = await readBody(req);
@@ -266,6 +317,34 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const accept = Array.isArray(body.accept) ? (body.accept as string[]) : [];
       const reject = Array.isArray(body.reject) ? (body.reject as string[]) : [];
       return json(res, applyWorkflowDecisions(accept, reject));
+    }
+    // Same "close, but…" loop for mined workflows: adjust the steps, then
+    // approve. Refinement rewrites the proposal in place, keeping its evidence.
+    if (req.method === 'POST' && path === '/api/proposals/refine') {
+      const body = await readBody(req);
+      const title = String(body.title ?? '');
+      const message = String(body.message ?? '').trim();
+      if (!message) return json(res, { error: 'say what to change' }, 400);
+      const file = loadWorkflowProposals();
+      const proposal = file?.proposals.find((p) => p.entry.title === title && p.status === 'pending');
+      if (!file || !proposal) return json(res, { error: 'proposal not found' }, 404);
+      const chat = Array.isArray(body.chat) ? (body.chat as RefineTurn[]) : [];
+      const draft: WorkflowDraft = {
+        kind: 'workflow',
+        title: proposal.entry.title,
+        rule: proposal.entry.rule,
+        procedure: proposal.entry.procedure ?? [],
+      };
+      try {
+        const refined = await refineWorkflow(draft, chat, message);
+        if (!refined) return json(res, { error: 'could not parse the revision — try rewording' }, 502);
+        proposal.entry = applyWorkflowRefinement(proposal.entry, refined);
+        saveWorkflowProposals(file.proposals);
+        const nextChat: RefineTurn[] = [...chat, { role: 'user', text: message }, { role: 'assistant', text: refined.reply }];
+        return json(res, { entry: proposal.entry, reply: refined.reply, chat: nextChat });
+      } catch (err) {
+        return json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
+      }
     }
     if (req.method === 'GET' && path === '/api/aops') return json(res, loadAops());
     if (req.method === 'GET' && path === '/api/aops/runs') {
@@ -946,13 +1025,16 @@ function loadAssistOffers(){
       }).join('');
       return '<div class="card summary" style="border-color:#00c8a0">'
         + '<div class="summary-head"><h3>💡 '+esc(o.goal)+'</h3>'
-        + '<span class="muted" style="font-size:12px">'+esc(o.confidence)+' confidence</span></div>'
+        + '<span class="muted" style="font-size:12px">'+(o.refined?'✏️ adjusted · ':'')+esc(o.confidence)+' confidence</span></div>'
         + '<div style="margin:6px 0 10px">'+esc(o.offer)+'</div>'
         + facts
         + '<div class="handoff" style="margin-top:10px">'
         + '<button class="act run" onclick="acceptOffer(this, \\''+esc(o.id)+'\\')">🚀 Work on this</button> '
+        + '<button class="act ghost" onclick="toggleRefine(\\'off-'+esc(o.id)+'\\')">✏️ Adjust</button> '
         + '<button class="act ghost" onclick="dismissOffer(this, \\''+esc(o.goalKey)+'\\')">Not now</button>'
-        + '</div></div>';
+        + '</div>'
+        + refinePanel('off-'+esc(o.id), 'refineOffer(\\''+esc(o.id)+'\\')')
+        + '</div>';
     }).join('');
   }).catch(function(){});
 }
@@ -967,6 +1049,99 @@ function acceptOffer(btn, id){
 function dismissOffer(btn, goalKey){
   btn.disabled = true;
   api('/api/assist/dismiss', {goalKey: goalKey}).then(function(){ loadAssistOffers(); }).catch(function(){});
+}
+
+// --- Refinement: "close, but…" instead of rejecting -------------------------
+// A suggestion that's almost right is the common case, so every card gets a
+// small chat panel: say what to change, see the revision, run it when it fits.
+
+function refinePanel(key, sendCall){
+  return '<div id="rf-'+key+'" class="refine" style="display:none;margin-top:10px;border-top:1px solid #1f2a40;padding-top:10px">'
+    + '<div id="rfchat-'+key+'" class="rfchat" style="font-size:13px"></div>'
+    + '<div style="display:flex;gap:6px;margin-top:8px">'
+    + '<input id="rfin-'+key+'" class="rfin" placeholder="What should change? e.g. &quot;Zillow only, skip Facebook&quot;" '
+    + 'style="flex:1;background:#0f1522;border:1px solid #1f2a40;color:#e6ebf4;border-radius:8px;padding:8px 10px;font-size:13px" '
+    + 'onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();'+sendCall+';}">'
+    + '<button class="act ghost" onclick="'+sendCall+'">Send</button>'
+    + '</div></div>';
+}
+
+function toggleRefine(key){
+  var el = document.getElementById('rf-'+key);
+  if (!el) return;
+  var showing = el.style.display !== 'none';
+  el.style.display = showing ? 'none' : 'block';
+  if (!showing) { var input = document.getElementById('rfin-'+key); if (input) input.focus(); }
+}
+
+function rfAppend(key, role, text){
+  var box = document.getElementById('rfchat-'+key);
+  if (!box) return;
+  var color = role === 'user' ? '#8b97ad' : '#00c8a0';
+  var who = role === 'user' ? 'You' : 'Autopilot';
+  box.insertAdjacentHTML('beforeend',
+    '<div style="margin-bottom:6px"><b style="color:'+color+'">'+who+':</b> '+esc(text)+'</div>');
+  box.scrollTop = box.scrollHeight;
+}
+
+function refineOffer(id){
+  var key = 'off-'+id;
+  var input = document.getElementById('rfin-'+key);
+  var message = (input.value||'').trim();
+  if (!message) return;
+  input.value = ''; input.disabled = true;
+  rfAppend(key, 'user', message);
+  rfAppend(key, 'assistant', 'thinking…');
+  api('/api/assist/refine', {id: id, message: message}).then(function(r){
+    var box = document.getElementById('rfchat-'+key);
+    if (box && box.lastChild) box.removeChild(box.lastChild); // drop "thinking…"
+    input.disabled = false; input.focus();
+    if (r.error) { rfAppend(key, 'assistant', r.error); return; }
+    rfAppend(key, 'assistant', r.reply);
+    // Refresh the card so the revised goal/offer is what you approve.
+    loadAssistOffers();
+    setTimeout(function(){
+      var panel = document.getElementById('rf-'+key);
+      if (panel) panel.style.display = 'block';
+      var chat = document.getElementById('rfchat-'+key);
+      if (chat && r.chat) {
+        chat.innerHTML = '';
+        r.chat.forEach(function(t){ rfAppend(key, t.role, t.text); });
+      }
+    }, 350);
+  }).catch(function(){
+    input.disabled = false;
+    rfAppend(key, 'assistant', 'Could not reach the refiner.');
+  });
+}
+
+function refinePattern(title){
+  var key = 'pat-'+btoa(unescape(encodeURIComponent(title))).replace(/[^A-Za-z0-9]/g,'');
+  var input = document.getElementById('rfin-'+key);
+  var message = (input.value||'').trim();
+  if (!message) return;
+  input.value = ''; input.disabled = true;
+  rfAppend(key, 'user', message);
+  rfAppend(key, 'assistant', 'thinking…');
+  api('/api/proposals/refine', {title: title, message: message, chat: patternChat[title]||[]}).then(function(r){
+    var box = document.getElementById('rfchat-'+key);
+    if (box && box.lastChild) box.removeChild(box.lastChild);
+    input.disabled = false;
+    if (r.error) { rfAppend(key, 'assistant', r.error); return; }
+    patternChat[r.entry ? r.entry.title : title] = r.chat || [];
+    rfAppend(key, 'assistant', r.reply);
+    loadProposals(); // re-render with the revised steps
+  }).catch(function(){
+    input.disabled = false;
+    rfAppend(key, 'assistant', 'Could not reach the refiner.');
+  });
+}
+
+var patternChat = {};
+
+// Stable DOM key for a pattern title (titles contain spaces/punctuation).
+function patKey(title){
+  return 'pat-'+btoa(unescape(encodeURIComponent(title))).replace(/[^A-Za-z0-9]/g,'');
 }
 
 function mineNow(){
@@ -1002,7 +1177,10 @@ function loadProposals(){
       return '<div class="card prop"><h3>'+esc(e.title)+' <span class="conf '+esc(e.confidence)+'">'+esc(e.confidence)+' confidence</span></h3>'
         + '<p>'+esc(e.rule)+'</p><ol>'+steps+'</ol>'+quotes+trig
         + '<div class="btns"><button class="act approve" onclick="decide(\\''+esc(e.title).replace(/'/g,"\\\\'")+'\\',true)">Approve — automate this</button>'
-        + '<button class="act reject" onclick="decide(\\''+esc(e.title).replace(/'/g,"\\\\'")+'\\',false)">Not this one</button></div></div>';
+        + '<button class="act ghost" onclick="toggleRefine(patKey(\\''+esc(e.title).replace(/'/g,"\\\\'")+'\\'))">✏️ Adjust steps</button>'
+        + '<button class="act reject" onclick="decide(\\''+esc(e.title).replace(/'/g,"\\\\'")+'\\',false)">Not this one</button></div>'
+        + refinePanel(patKey(e.title), 'refinePattern(\\''+esc(e.title).replace(/'/g,"\\\\'")+'\\')')
+        + '</div>';
     }).join('') + (done.length ? '<h2 class="sec">Already decided</h2>' + done.map(function(p){
       return '<div class="card"><b>'+esc(p.entry.title)+'</b> <span class="muted">— '+esc(p.status)+'</span></div>';
     }).join('') : '');
